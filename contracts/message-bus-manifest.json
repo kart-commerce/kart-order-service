@@ -1,0 +1,93 @@
+{
+  "service": "kart-order-service",
+  "exchanges": [
+    { "name": "order.exchange", "type": "topic", "durable": true },
+    { "name": "order.dlx", "type": "topic", "durable": true }
+  ],
+  "externalExchanges": [
+    { "name": "inventory.exchange", "type": "topic", "durable": true },
+    { "name": "payment.exchange", "type": "topic", "durable": true },
+    { "name": "shipping.exchange", "type": "topic", "durable": true },
+    { "name": "tracking.exchange", "type": "topic", "durable": true }
+  ],
+  "publishedEvents": [
+    { "eventType": "OrderCreated", "exchange": "order.exchange", "routingKey": "order.order.created" },
+    { "eventType": "OrderConfirmed", "exchange": "order.exchange", "routingKey": "order.order.confirmed" },
+    { "eventType": "OrderCancelled", "exchange": "order.exchange", "routingKey": "order.order.cancelled" },
+    { "eventType": "OrderCompensationTriggered", "exchange": "order.exchange", "routingKey": "order.order.compensation-triggered" },
+    { "eventType": "OrderDelivered", "exchange": "order.exchange", "routingKey": "order.order.delivered" }
+  ],
+  "queues": [
+    {
+      "name": "order.inventory-events.queue",
+      "durable": true,
+      "bindings": [
+        { "exchange": "inventory.exchange", "routingKey": "inventory.reservation.reserved" },
+        { "exchange": "inventory.exchange", "routingKey": "inventory.reservation.failed" }
+      ],
+      "deadLetter": { "exchange": "order.dlx", "routingKey": "order.inventory-events.dlq" },
+      "retryLadder": {
+        "requeueTo": "order.inventory-events.queue",
+        "tiers": [
+          { "name": "order.inventory-events.retry.30s", "ttlMs": 30000 },
+          { "name": "order.inventory-events.retry.5m", "ttlMs": 300000 }
+        ]
+      }
+    },
+    {
+      "name": "order.payment-events.queue",
+      "durable": true,
+      "bindings": [
+        { "exchange": "payment.exchange", "routingKey": "payment.intent.completed" },
+        { "exchange": "payment.exchange", "routingKey": "payment.intent.failed" },
+        { "exchange": "payment.exchange", "routingKey": "payment.chargeback.received" }
+      ],
+      "deadLetter": { "exchange": "order.dlx", "routingKey": "order.payment-events.dlq" },
+      "retryLadder": {
+        "requeueTo": "order.payment-events.queue",
+        "tiers": [
+          { "name": "order.payment-events.retry.30s", "ttlMs": 30000 },
+          { "name": "order.payment-events.retry.5m", "ttlMs": 300000 }
+        ]
+      }
+    },
+    {
+      "name": "order.shipping-events.queue",
+      "durable": true,
+      "bindings": [
+        { "exchange": "shipping.exchange", "routingKey": "shipping.shipment.dispatched" },
+        { "exchange": "shipping.exchange", "routingKey": "shipping.shipment.creation-failed" }
+      ],
+      "deadLetter": { "exchange": "order.dlx", "routingKey": "order.shipping-events.dlq" },
+      "retryLadder": {
+        "requeueTo": "order.shipping-events.queue",
+        "tiers": [
+          { "name": "order.shipping-events.retry.30s", "ttlMs": 30000 },
+          { "name": "order.shipping-events.retry.5m", "ttlMs": 300000 }
+        ]
+      }
+    },
+    {
+      "name": "order.tracking-events.queue",
+      "durable": true,
+      "bindings": [
+        { "exchange": "tracking.exchange", "routingKey": "tracking.delivery-status.updated" }
+      ],
+      "deadLetter": { "exchange": "order.dlx", "routingKey": "order.tracking-events.dlq" },
+      "retryLadder": {
+        "requeueTo": "order.tracking-events.queue",
+        "tiers": [
+          { "name": "order.tracking-events.retry.30s", "ttlMs": 30000 },
+          { "name": "order.tracking-events.retry.5m", "ttlMs": 300000 }
+        ]
+      }
+    }
+  ],
+  "deadLetterQueues": [
+    { "name": "order.inventory-events.dlq", "exchange": "order.dlx", "routingKey": "order.inventory-events.dlq" },
+    { "name": "order.payment-events.dlq", "exchange": "order.dlx", "routingKey": "order.payment-events.dlq" },
+    { "name": "order.shipping-events.dlq", "exchange": "order.dlx", "routingKey": "order.shipping-events.dlq" },
+    { "name": "order.tracking-events.dlq", "exchange": "order.dlx", "routingKey": "order.tracking-events.dlq" }
+  ],
+  "_comment": "Source of truth for this service's entire RabbitMQ topology (event-contract.md). Order's own five published lifecycle events are elevated to a 5x-exponential/paged-on-call tier (requirement-spec.md's Retry/DLQ Tiering resolution, Open Questions #7) - the retry ladder above encodes that as OutboxRelayHostedService's own retry count on transient publish failure, layered on top of RabbitMQ's standard redelivery; the TTL-ladder queues here (per event-standards.md, 'never immediate requeue - avoids hot-loop under persistent failure') are for the four CONSUMER queues, each with its own dedicated DLQ - never shared. There is deliberately no order.read-model-projection.queue (contrast with kart-payment-service's manifest): database-design.md's own text states the Mongo read-model projector 'reads directly off the Outbox stream via its own internal subscription, not the public RabbitMQ exchange' - because it needs to project every order_events transition row, not just the subset that also carries a published business event - so ORD-3 is implemented as a direct-Postgres poller (OrderReadModelProjectorHostedService), not a RabbitMQ self-consumer. order.tracking-events.queue's application-level 'hold until Shipped, bounded to 60s' state-guard (design-decisions.md) is implemented in DeliveryStatusUpdatedConsumerHostedService's own NACK/requeue logic, independent of this queue's standard retry ladder above, which exists for genuine processing failures."
+}

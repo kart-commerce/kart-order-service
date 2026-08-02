@@ -1,0 +1,15 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  ci:
+    # kart-conventions.md: "CI: service repos call the reusable workflow published from kart-devops."
+    uses: kart-commerce/kart-devops/.github/workflows/dotnet-service-ci.yml@main
+    with:
+      dotnet-version: "8.0.x"
+      solution-path: KartOrderService.sln

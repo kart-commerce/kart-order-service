@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <ItemGroup>
+    <PackageReference Include="FluentValidation.AspNetCore" Version="11.3.0" />
+    <PackageReference Include="MediatR" Version="12.4.1" />
+    <PackageReference Include="Swashbuckle.AspNetCore" Version="6.6.2" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="8.0.10" />
+  </ItemGroup>
+
+  <!--
+    kart-conventions.md Observability section: Kart.Shared.Observability wires Serilog + the
+    OpenTelemetry SDK behind one DI call - never reimplemented per service. Kart.Shared.ErrorHandling
+    wires the single global exception handler + ProblemDetails factory. Kart.Shared.Auditing supplies
+    the IAuditLogWriter contract. Kart.Shared.Configuration wires the GlobalConfig
+    external-secrets-file bootstrap (see appsettings.Local.json.example).
+  -->
+  <ItemGroup>
+    <PackageReference Include="Kart.Shared.ErrorHandling" Version="0.1.0" />
+    <PackageReference Include="Kart.Shared.Observability" Version="0.2.0" />
+    <PackageReference Include="Kart.Shared.Auditing" Version="0.1.0" />
+    <PackageReference Include="Kart.Shared.Configuration" Version="0.1.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Application\KartOrderService.Application.csproj" />
+    <ProjectReference Include="..\Infrastructure\KartOrderService.Infrastructure.csproj" />
+  </ItemGroup>
+
+  <!--
+    contracts/message-bus-manifest.json is this service's single source of truth for its RabbitMQ
+    topology - copied here so RabbitMqOptions.ManifestPath (resolved against
+    AppContext.BaseDirectory) finds it at runtime without a relative "../../contracts" path that
+    would break once this service is deployed as its own container image.
+  -->
+  <ItemGroup>
+    <Content Include="..\..\contracts\message-bus-manifest.json" Link="message-bus-manifest.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

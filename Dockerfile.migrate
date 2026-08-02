@@ -1,0 +1,40 @@
+FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+WORKDIR /src
+
+COPY nuget.config .
+COPY packages packages
+COPY .config/dotnet-tools.json .config/
+COPY src/Application/KartOrderService.Application.csproj src/Application/
+COPY src/Domain/KartOrderService.Domain.csproj src/Domain/
+COPY src/Infrastructure/KartOrderService.Infrastructure.csproj src/Infrastructure/
+RUN dotnet tool restore
+RUN dotnet restore src/Infrastructure/KartOrderService.Infrastructure.csproj
+
+COPY src/Application src/Application
+COPY src/Domain src/Domain
+COPY src/Infrastructure src/Infrastructure
+
+# `migrations bundle` runs its internal `dotnet publish` from its own temp working directory, so
+# nuget.config's relative local-feed path ("packages") resolves against the wrong directory
+# (NU1301) unless it's absolute — safe to rewrite here since /src is a fixed path in this image
+# (kart-identity-service/Dockerfile.migrate precedent).
+RUN sed -i "s#value=\"packages\"#value=\"/src/packages\"#" nuget.config
+
+# Infrastructure is its own design-time startup project — OrderDbContextFactory builds the
+# DbContext directly from ORDER_DB_CONNECTION_STRING, no Api host needed. Self-contained: the
+# runtime stage needs no .NET runtime, just OS deps (runtime-deps).
+RUN dotnet tool run dotnet-ef migrations bundle \
+    --configuration Release \
+    --self-contained -r linux-x64 \
+    --project src/Infrastructure/KartOrderService.Infrastructure.csproj \
+    --startup-project src/Infrastructure/KartOrderService.Infrastructure.csproj \
+    -o /app/efbundle
+
+FROM mcr.microsoft.com/dotnet/runtime-deps:8.0 AS runtime
+WORKDIR /app
+COPY --from=build /app/efbundle .
+
+# Same env var OrderDbContextFactory reads at design time (see
+# src/Infrastructure/Persistence/OrderDbContextFactory.cs) — one convention for "how this service
+# learns its connection string," in dev, CI, and every deployed environment.
+ENTRYPOINT ["/bin/sh", "-c", "exec ./efbundle --connection \"$ORDER_DB_CONNECTION_STRING\""]

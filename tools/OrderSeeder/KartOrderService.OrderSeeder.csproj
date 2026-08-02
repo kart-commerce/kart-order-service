@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Bogus" Version="35.6.5" />
+  </ItemGroup>
+
+  <!--
+    Pulls in OrderDbContext/OrderConfiguration (the schema source of truth) and, with it,
+    Infrastructure's RabbitMQ/Mongo package refs and the Microsoft.AspNetCore.App FrameworkReference —
+    unused here (this tool talks to Postgres directly, never RabbitMQ/Mongo) but accepted for the
+    same reason Dockerfile.migrate references Infrastructure directly rather than duplicating the
+    DbContext (kart-category-service/tools/CategorySeeder precedent).
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Infrastructure\KartOrderService.Infrastructure.csproj" />
+  </ItemGroup>
+
+</Project>

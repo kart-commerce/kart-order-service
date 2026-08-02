@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+    <PackageReference Include="FluentAssertions" Version="6.12.1" />
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="8.0.10" />
+    <PackageReference Include="YamlDotNet" Version="16.1.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Reuses OrderApiFactory's Testcontainers-backed fixture rather than duplicating
+         container-management code for a second, lighter-weight factory. -->
+    <ProjectReference Include="..\IntegrationTests\KartOrderService.IntegrationTests.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="..\..\contracts\api-contract.yaml" Link="contracts\api-contract.yaml" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>
