@@ -34,7 +34,10 @@ services:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "8082:8080"
+      # ${ORDER_PORT} matches kart-devops/ports.env's canonical value for this service --
+      # `source ../kart-devops/ports.env` first to pick it up automatically; the :-8088 fallback
+      # is only for running this repo fully standalone, with no kart-devops checkout alongside it.
+      - "${ORDER_PORT:-8088}:8080"
     environment:
       ConnectionStrings__OrderDatabase: "Host=postgres;Port=5432;Database=kart_order_dev;Username=postgres;Password=postgres"
       Mongo__ConnectionString: "mongodb://mongo:27017"
@@ -42,8 +45,13 @@ services:
       RabbitMq__HostName: "rabbitmq"
       RabbitMq__UserName: "order"
       RabbitMq__Password: "order"
-      Inventory__BaseUrl: "http://host.docker.internal:5100"
-      Payment__BaseUrl: "http://host.docker.internal:8080"
+      # host.docker.internal:<port> reaches each dependency's own local dev port (its
+      # launchSettings.json http profile / kart-devops/ports.env host port — both now aligned)
+      # on the host machine, since neither inventory nor payment has a container here. Same
+      # ${INVENTORY_PORT}/${PAYMENT_PORT} vars as kart-devops/ports.env; :- fallbacks are its
+      # current canonical values for running this repo standalone.
+      Inventory__BaseUrl: "http://host.docker.internal:${INVENTORY_PORT:-8086}"
+      Payment__BaseUrl: "http://host.docker.internal:${PAYMENT_PORT:-8089}"
     depends_on:
       - postgres
       - mongo
