@@ -17,7 +17,7 @@ var builder = WebApplication.CreateBuilder(args);
 // shared across every service - never reimplemented per service. See appsettings.Local.json.example.
 // Must run before AddKartObservability below, since observability's own LogFile:Directory setting
 // is read from the layered-in GlobalConfig file too.
-builder.AddKartGlobalConfig();
+builder.AddKartGlobalConfig("kart-order-service");
 
 // kart-conventions.md Observability section: Serilog + OpenTelemetry SDK behind one DI call.
 // Order is one of the platform's 100%-trace-coverage services (requirement-spec.md's Observability
