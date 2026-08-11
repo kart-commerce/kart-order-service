@@ -52,6 +52,24 @@ public sealed class CancelOrderEndpointTests : IClassFixture<OrderApiFactory>
     }
 
     [Fact]
+    public async Task Cancel_WithReasonBody_ReturnsOk_WithCancelledStatus()
+    {
+        var client = _factory.CreateClient();
+        var orderId = await CreateOrderAsync(client);
+
+        var cancelRequest = new HttpRequestMessage(HttpMethod.Post, $"/v1/orders/{orderId}/cancel")
+        {
+            Content = JsonContent.Create(new { reason = "customer_changed_mind" }),
+        };
+        cancelRequest.Headers.Add("Idempotency-Key", $"key-{Guid.NewGuid():N}");
+        var response = await client.SendAsync(cancelRequest);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var view = await response.Content.ReadFromJsonAsync<OrderViewResponse>(JsonOptions);
+        view!.Status.Should().Be("Cancelled");
+    }
+
+    [Fact]
     public async Task Cancel_TwiceInARow_IsIdempotent_SecondCallStillReturnsOk()
     {
         var client = _factory.CreateClient();

@@ -33,6 +33,56 @@ servers:
 
 paths:
   /v1/orders:
+    get:
+      operationId: listOrders
+      summary: Admin Order Management list/search view (filtered, paged). Internal, admin-only.
+      description: >
+        Flow #7. Served from the MongoDB read model, sorted by createdAt descending. This is the
+        admin Order Management list — there is deliberately no customer self-service list endpoint
+        in this service. Admin Service's client-credentials service principal only (ADR-0010's
+        platform-wide admin-write integration pattern, mirroring resolve-fulfillment-exception).
+      security:
+        - clientCredentials: [admin]
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema: { type: string, enum: [Created, Reserved, Paid, Shipped, Delivered, FulfillmentException, Cancelled, Refunded] }
+        - name: userId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: createdFrom
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+        - name: createdTo
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+        - name: page
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, default: 1 }
+        - name: pageSize
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PagedOrders' }
+        '400':
+          description: "Invalid paging (page < 1, or pageSize outside 1..100)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '403':
+          description: Caller is not Admin Service's confirmed service principal.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
     post:
       operationId: createOrder
       summary: Create an order and begin the Saga (synchronous Inventory reserve, then async onward).
@@ -135,6 +185,11 @@ paths:
           in: header
           required: true
           schema: { type: string }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CancelOrderRequest' }
       responses:
         '200':
           description: >
@@ -217,6 +272,181 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Problem' }
 
+  /v1/orders/{id}/shipping-address:
+    patch:
+      operationId: updateOrderShippingAddress
+      summary: Attach/correct an order's delivery address. Internal, admin-only.
+      description: >
+        Flow #7. Legal only while the order has not yet shipped (past Shipped a courier label
+        already exists against the old address — that is a returns-flow concern). Records an
+        OrderShippingAddressUpdated event; does not change status. Admin Service's
+        client-credentials service principal only.
+      security:
+        - clientCredentials: [admin]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateShippingAddressRequest' }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OrderView' }
+        '403':
+          description: Caller is not Admin Service's confirmed service principal.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '409':
+          description: "Order is already Shipped or later — the address can no longer be changed."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /v1/orders/{id}/status:
+    patch:
+      operationId: adminUpdateOrderStatus
+      summary: Admin ops-recovery manual status advance. Internal, admin-only.
+      description: >
+        Flow #7. A fallback letting an admin manually advance a stalled order when the normal
+        event-driven trigger did not fire (the same advances the reconciliation sweep performs
+        automatically, here admin-initiated and audited). Allowed targets are restricted to
+        {Shipped, Delivered, FulfillmentException} at the command layer; the transition must still
+        be legal from the current status (409 otherwise). Records an OrderStatusChangedByAdmin
+        event. Admin Service's client-credentials service principal only.
+      security:
+        - clientCredentials: [admin]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AdminUpdateOrderStatusRequest' }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OrderView' }
+        '400':
+          description: "targetStatus is not one of {Shipped, Delivered, FulfillmentException}, or reason was empty."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '403':
+          description: Caller is not Admin Service's confirmed service principal.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '409':
+          description: "The requested transition is illegal from the order's current status."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /v1/orders/{id}/invoice:
+    get:
+      operationId: generateInvoice
+      summary: Invoice view for an order with a completed payment. Internal, admin-only.
+      description: >
+        Flow #7. Derived entirely from the read model — nothing is separately stored. The invoice
+        number is deterministic from the order id; subtotal equals total (order-service has no
+        separate tax/shipping-fee line). Only available once payment has completed (status is one
+        of Paid, Shipped, Delivered, FulfillmentException, Refunded); 409 otherwise. Admin
+        Service's client-credentials service principal only.
+      security:
+        - clientCredentials: [admin]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Invoice' }
+        '403':
+          description: Caller is not Admin Service's confirmed service principal.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '409':
+          description: "Order has no completed payment to invoice (status is Created, Reserved, or Cancelled)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /v1/orders/{id}/request-shipment:
+    post:
+      operationId: requestShipment
+      summary: Record an admin's intent to ship a paid order. Internal, admin-only.
+      description: >
+        Flow #7. Records an OrderShipmentRequested event (intent only — does not change status).
+        Legal only when the order is Paid. The eventual consumer (kart-shipping-service, flow #8)
+        does not exist yet, so today this durably records/publishes the intent for whenever it
+        does; no downstream side effect is expected yet. Admin Service's client-credentials
+        service principal only.
+      security:
+        - clientCredentials: [admin]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OrderView' }
+        '403':
+          description: Caller is not Admin Service's confirmed service principal.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '409':
+          description: "Order is not Paid — shipment cannot be requested from this state."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
 components:
   securitySchemes:
     clientCredentials:
@@ -251,6 +481,19 @@ components:
         qty: { type: integer }
         unitPrice: { $ref: '#/components/schemas/Money' }
 
+    ShippingAddress:
+      type: object
+      required: [recipientName, line1, city, state, postalCode, country]
+      properties:
+        recipientName: { type: string }
+        line1: { type: string }
+        line2: { type: string, nullable: true }
+        city: { type: string }
+        state: { type: string }
+        postalCode: { type: string }
+        country: { type: string }
+        phone: { type: string, nullable: true }
+
     OrderView:
       type: object
       required: [orderId, userId, status, items, totalAmount, createdAt]
@@ -266,3 +509,81 @@ components:
           items: { $ref: '#/components/schemas/OrderLineItemView' }
         totalAmount: { $ref: '#/components/schemas/Money' }
         createdAt: { type: string, format: date-time }
+        shippingAddress:
+          allOf: [{ $ref: '#/components/schemas/ShippingAddress' }]
+          nullable: true
+          description: Flow #7 — the delivery address an admin attached/corrected; null when none has been set.
+
+    OrderSummary:
+      type: object
+      required: [orderId, userId, status, totalAmount, createdAt, updatedAt]
+      properties:
+        orderId: { type: string, format: uuid }
+        userId: { type: string, format: uuid }
+        status:
+          type: string
+          enum: [Created, Reserved, Paid, Shipped, Delivered, FulfillmentException, Cancelled, Refunded]
+        totalAmount: { $ref: '#/components/schemas/Money' }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    PagedOrders:
+      type: object
+      required: [items, totalCount, page, pageSize]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/OrderSummary' }
+        totalCount: { type: integer, format: int64 }
+        page: { type: integer }
+        pageSize: { type: integer }
+
+    Invoice:
+      type: object
+      required: [invoiceNumber, orderId, userId, status, items, subtotal, total, orderCreatedAt, issuedAt]
+      properties:
+        invoiceNumber: { type: string, description: "Deterministic from the order id: INV-<first 10 hex of orderId, uppercased>." }
+        orderId: { type: string, format: uuid }
+        userId: { type: string, format: uuid }
+        status: { type: string }
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/OrderLineItemView' }
+        subtotal:
+          allOf: [{ $ref: '#/components/schemas/Money' }]
+          description: Equal to total — order-service has no separate tax or shipping-fee line.
+        total: { $ref: '#/components/schemas/Money' }
+        shippingAddress:
+          allOf: [{ $ref: '#/components/schemas/ShippingAddress' }]
+          nullable: true
+        orderCreatedAt: { type: string, format: date-time }
+        issuedAt: { type: string, format: date-time, description: "The moment the invoice was viewed — not persisted." }
+
+    CancelOrderRequest:
+      type: object
+      description: Optional body for POST /v1/orders/{id}/cancel — the request may omit it entirely.
+      properties:
+        reason: { type: string, nullable: true, description: Optional free-text cancellation reason; defaults to "client_cancel" when omitted. }
+
+    UpdateShippingAddressRequest:
+      type: object
+      required: [recipientName, line1, city, state, postalCode, country]
+      properties:
+        recipientName: { type: string }
+        line1: { type: string }
+        line2: { type: string, nullable: true }
+        city: { type: string }
+        state: { type: string }
+        postalCode: { type: string }
+        country: { type: string }
+        phone: { type: string, nullable: true }
+
+    AdminUpdateOrderStatusRequest:
+      type: object
+      required: [targetStatus, reason]
+      properties:
+        targetStatus:
+          type: string
+          enum: [Shipped, Delivered, FulfillmentException]
+          description: The only admin-reachable manual targets (scope boundary enforced at the command layer, not the domain).
+        reason: { type: string }

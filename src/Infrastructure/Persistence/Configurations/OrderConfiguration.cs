@@ -54,6 +54,23 @@ public sealed class OrderConfiguration : IEntityTypeConfiguration<Order>
         builder.Property(o => o.CreatedBy).HasColumnName("created_by").IsRequired();
         builder.Property(o => o.UpdatedBy).HasColumnName("updated_by").IsRequired();
 
+        // Flow #7 (Order Management, Admin): the optional shipping address, mapped as an owned
+        // reference onto the `orders` table itself (columns all nullable — most orders never set one).
+        // EF Core 8+ requires the explicit Navigation(...).IsRequired(false) below for a nullable
+        // owned reference, otherwise it throws at model-build time treating it as required.
+        builder.OwnsOne(o => o.ShippingAddress, addr =>
+        {
+            addr.Property(a => a.RecipientName).HasColumnName("shipping_recipient_name");
+            addr.Property(a => a.Line1).HasColumnName("shipping_line1");
+            addr.Property(a => a.Line2).HasColumnName("shipping_line2");
+            addr.Property(a => a.City).HasColumnName("shipping_city");
+            addr.Property(a => a.State).HasColumnName("shipping_state");
+            addr.Property(a => a.PostalCode).HasColumnName("shipping_postal_code");
+            addr.Property(a => a.Country).HasColumnName("shipping_country");
+            addr.Property(a => a.Phone).HasColumnName("shipping_phone");
+        });
+        builder.Navigation(o => o.ShippingAddress).IsRequired(false);
+
         builder.OwnsMany(o => o.LineItems, item =>
         {
             item.ToTable("order_items");
@@ -105,6 +122,11 @@ public sealed class OrderConfiguration : IEntityTypeConfiguration<Order>
 
             evt.Property(e => e.EventType).HasColumnName("event_type").HasMaxLength(64);
             evt.Property(e => e.Payload).HasColumnName("payload").HasColumnType("jsonb");
+
+            // Flow #7: the originating request's W3C traceparent, replayed by the outbox relay so the
+            // async RabbitMQ publish continues the original trace. Nullable (rows written outside any
+            // active Activity, and every row written before this column existed, have none).
+            evt.Property(e => e.TraceParent).HasColumnName("trace_parent").HasMaxLength(64);
 
             evt.Property(e => e.CreatedAt).HasColumnName("created_at").IsRequired();
             evt.Property(e => e.PublishedAt).HasColumnName("published_at");

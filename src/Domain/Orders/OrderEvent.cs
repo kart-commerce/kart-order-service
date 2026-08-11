@@ -1,3 +1,5 @@
+using System.Diagnostics;
+
 namespace KartOrderService.Domain.Orders;
 
 /// <summary>
@@ -42,6 +44,16 @@ public sealed class OrderEvent
 
     public string UpdatedBy { get; private set; } = "system:order-outbox-poller";
 
+    /// <summary>
+    /// W3C <c>traceparent</c> of the request/activity that produced this event, captured here at
+    /// construction — the single choke point every code path that creates an <see cref="OrderEvent"/>
+    /// flows through (<see cref="Order.Create"/>/<c>Transition</c>/<c>RecordEvent</c>). The outbox
+    /// relay replays this so the async RabbitMQ publish continues the *originating* request's trace,
+    /// not the background poller's own unrelated activity (which is what <c>Activity.Current</c>
+    /// would be at relay time). Nullable — a row written outside any active Activity has none.
+    /// </summary>
+    public string? TraceParent { get; private set; }
+
     /// <summary>EF Core materialization only.</summary>
     private OrderEvent()
     {
@@ -59,6 +71,7 @@ public sealed class OrderEvent
         CreatedAt = now;
         UpdatedAt = now;
         CreatedBy = actingPrincipal;
+        TraceParent = Activity.Current?.Id;
     }
 
     public void MarkPublished(DateTimeOffset publishedAt)

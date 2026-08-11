@@ -19,8 +19,45 @@ Exchange: `order.exchange` (owned by this service, per [kart-conventions.md](../
 | `OrderCancelled` | `order.order.cancelled` | Inventory, Offer, Notification, Analytics | `orderId`, `reason` | 5x exponential, paged on-call | `order.order-cancelled.dlq` | Same elevation rationale — a stuck `OrderCancelled` leaves Inventory's reservation un-released and Offer's coupon redemption un-voided |
 | `OrderCompensationTriggered` | `order.order.compensation-triggered` | Inventory, Notification, Analytics | `orderId`, `reason` | 5x exponential, paged on-call | `order.order-compensation-triggered.dlq` | Same elevation rationale (ADR-0007 originally assigned 3x/`order.dlq`; requirement-spec resolution #7 elevates it alongside its sibling Order lifecycle events, since it is the signal that actually triggers Inventory's release) |
 | `OrderDelivered` | `order.order.delivered` | Recommendation, Review, Notification, Analytics | `orderId`, `deliveredAt` | 5x exponential, paged on-call | `order.order-delivered.dlq` | Same elevation rationale — unifies the BRD's phantom `OrderCompleted`/`OrderDelivered` naming (ADR-0005); a stuck delivery signal blocks Review's verified-purchase gate and Recommendation's training signal indefinitely |
+| `OrderShippingAddressUpdated` | `order.order.shipping-address-updated` | Shipping (future), Notification, Analytics | `orderId`, `address` | standard | `order.order-shipping-address-updated.dlq` | Flow #7 (Order Management, Admin). An admin attached/corrected the delivery address on a not-yet-shipped order. Not saga-critical (no downstream state unwinds if it lags), so it stays at the standard tier rather than the elevated 5x/paged tier the money/stock-adjacent lifecycle events sit at. |
+| `OrderStatusChangedByAdmin` | `order.order.status-changed-by-admin` | Notification, Analytics | `orderId`, `fromStatus`, `toStatus`, `reason` | standard | `order.order-status-changed-by-admin.dlq` | Flow #7. An admin manually advanced a stalled order (ops-recovery fallback mirroring the reconciliation sweep). An audit/visibility signal, not a saga trigger — standard tier. |
+| `OrderShipmentRequested` | `order.order.shipment-requested` | Shipping (future, flow #8), Analytics | `orderId`, `requestedBy`, `requestedAt` | standard | `order.order-shipment-requested.dlq` | Flow #7. Records an admin's intent to ship a paid order. Its eventual consumer (`kart-shipping-service`) does not exist yet — the event is published today purely so the intent is durably recorded for whenever that consumer arrives. |
 
-No new published events were introduced by this pass — `ddd-model.md`'s Modeling Decision #4 confirms `ChargebackReceived` and `ShipmentCreationFailed` (both newly consumed) do not require a new Order-published counterpart, since Notification/Analytics are already reached directly from Payment's/Shipping's own publication of those events.
+Flow #7 (Order Management, Admin) introduced the three published events above. Their payload shapes:
+
+```
+// OrderShippingAddressUpdated — routing key order.order.shipping-address-updated
+{
+  "orderId": "uuid",
+  "address": {
+    "recipientName": "string",
+    "line1": "string",
+    "line2": "string | null",
+    "city": "string",
+    "state": "string",
+    "postalCode": "string",
+    "country": "string",
+    "phone": "string | null"
+  }
+}
+
+// OrderStatusChangedByAdmin — routing key order.order.status-changed-by-admin
+{
+  "orderId": "uuid",
+  "fromStatus": "string (OrderStatus)",
+  "toStatus": "string (OrderStatus)",
+  "reason": "string"
+}
+
+// OrderShipmentRequested — routing key order.order.shipment-requested
+{
+  "orderId": "uuid",
+  "requestedBy": "string (acting principal)",
+  "requestedAt": "date-time"
+}
+```
+
+Aside from these three Flow #7 additions, `ddd-model.md`'s Modeling Decision #4 confirms `ChargebackReceived` and `ShipmentCreationFailed` (both consumed, not published) do not require a new Order-published counterpart, since Notification/Analytics are already reached directly from Payment's/Shipping's own publication of those events.
 
 ## Consumed
 

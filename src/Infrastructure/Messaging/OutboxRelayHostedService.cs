@@ -1,5 +1,6 @@
 using System.Text;
 using Kart.Shared.Messaging;
+using Kart.Shared.Observability;
 using KartOrderService.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -25,6 +26,7 @@ public sealed class OutboxRelayHostedService(
     MessageBusManifest manifest,
     ILogger<OutboxRelayHostedService> logger) : BackgroundService
 {
+    private const string FlowName = "OrderManagementAdmin";
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan ReconnectDelay = TimeSpan.FromSeconds(10);
     private const int BatchSize = 100;
@@ -81,11 +83,19 @@ public sealed class OutboxRelayHostedService(
             return;
         }
 
+        // Same tie-break as OrderReadModelProjectorHostedService's own fix — two of one order's own
+        // events can share an identical CreatedAt; Sequence (this aggregate's explicit monotonic
+        // ordering) is the correct deterministic tiebreak, not EF Core's unspecified owned-
+        // collection load order. Consumers already have Sequence embedded in the payload as a
+        // reordering guard, but publishing in the right order to begin with costs nothing.
         var pending = pendingOrders
             .SelectMany(o => o.Events)
             .Where(e => e.EventType != null && e.PublishedAt == null)
             .OrderBy(e => e.CreatedAt)
+            .ThenBy(e => e.Sequence)
             .ToList();
+
+        using var _ = KartFlowContext.Push(FlowName);
 
         var now = DateTimeOffset.UtcNow;
         foreach (var outboxEvent in pending)
@@ -95,13 +105,32 @@ public sealed class OutboxRelayHostedService(
             properties.MessageId = outboxEvent.Id.ToString();
             properties.ContentType = "application/json";
 
+            var exchange = manifest.ExchangeFor(outboxEvent.EventType!);
+            var routingKey = manifest.RoutingKeyFor(outboxEvent.EventType!);
+
+            // `using var` (NOT an explicit `using (...) { }` block) so the publish Activity stays
+            // current through the Stage log line below too — an explicit block would dispose it
+            // before that log ran, silently leaving OutboxEventPublished untagged with any TraceId
+            // (a real bug found+fixed in two sibling services). The stored TraceParent replays the
+            // *originating* request's trace across this async hop, since Activity.Current here is
+            // just the background poller's own unrelated activity.
+            using var activity = RabbitMqTraceContext.StartPublishActivityFromStoredTraceParent(exchange, routingKey, outboxEvent.TraceParent, properties);
+
             channel.BasicPublish(
-                exchange: manifest.ExchangeFor(outboxEvent.EventType!),
-                routingKey: manifest.RoutingKeyFor(outboxEvent.EventType!),
+                exchange: exchange,
+                routingKey: routingKey,
                 basicProperties: properties,
                 body: Encoding.UTF8.GetBytes(outboxEvent.Payload ?? "{}"));
 
             outboxEvent.MarkPublished(now);
+
+            logger.LogInformation(
+                "Stage {Stage}: {EventType} outbox event {OutboxId} published to {Exchange}/{RoutingKey}",
+                "OutboxEventPublished",
+                outboxEvent.EventType,
+                outboxEvent.Id,
+                exchange,
+                routingKey);
         }
 
         await dbContext.SaveChangesAsync(cancellationToken);

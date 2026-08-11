@@ -355,4 +355,130 @@ public sealed class OrderTests
         sequences.Should().BeInAscendingOrder();
         sequences.Should().OnlyHaveUniqueItems();
     }
+
+    // ── Flow #7: UpdateShippingAddress ──────────────────────────────────────────────────────────
+
+    private static ShippingAddress SampleAddress() =>
+        new("Ada Lovelace", "1 Analytical Ave", null, "London", "LDN", "EC1", "GB", "+44 20 0000 0000");
+
+    [Fact]
+    public void UpdateShippingAddress_FromCreated_SucceedsAndRecordsEvent_WithoutChangingStatus()
+    {
+        var order = CreateOrder();
+
+        var result = order.UpdateShippingAddress(SampleAddress(), Principal, Now);
+
+        result.IsSuccess.Should().BeTrue();
+        order.ShippingAddress.Should().NotBeNull();
+        order.ShippingAddress!.RecipientName.Should().Be("Ada Lovelace");
+        order.Status.Should().Be(OrderStatus.Created, "an address edit never changes the saga state");
+        order.Events.Should().Contain(e => e.EventType == "OrderShippingAddressUpdated");
+    }
+
+    [Fact]
+    public void UpdateShippingAddress_FromPaid_IsLegal()
+    {
+        var order = CreateOrder();
+        PayOrder(order);
+
+        var result = order.UpdateShippingAddress(SampleAddress(), Principal, Now);
+
+        result.IsSuccess.Should().BeTrue();
+        order.ShippingAddress.Should().NotBeNull();
+    }
+
+    [Fact]
+    public void UpdateShippingAddress_WhenShipped_ReturnsConflict()
+    {
+        var order = CreateOrder();
+        PayOrder(order);
+        order.TryAdvanceToShipped("TRACK-1", Principal, Now);
+
+        var result = order.UpdateShippingAddress(SampleAddress(), Principal, Now);
+
+        result.IsFailure.Should().BeTrue("a courier/label already exists past Shipped");
+        result.Error.Code.Should().Be("conflict");
+        order.ShippingAddress.Should().BeNull();
+    }
+
+    [Fact]
+    public void UpdateShippingAddress_WhenCancelled_ReturnsConflict()
+    {
+        var order = CreateOrder();
+        order.TryCancel("client_cancel", Principal, Now);
+
+        var result = order.UpdateShippingAddress(SampleAddress(), Principal, Now);
+
+        result.IsFailure.Should().BeTrue();
+        result.Error.Code.Should().Be("conflict");
+    }
+
+    // ── Flow #7: AdminAdvanceStatus ─────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void AdminAdvanceStatus_PaidToShipped_Succeeds()
+    {
+        var order = CreateOrder();
+        PayOrder(order);
+
+        var result = order.AdminAdvanceStatus(OrderStatus.Shipped, "carrier picked up manually", Principal, Now);
+
+        result.IsSuccess.Should().BeTrue();
+        order.Status.Should().Be(OrderStatus.Shipped);
+        order.Events.Should().Contain(e => e.EventType == "OrderStatusChangedByAdmin");
+    }
+
+    [Fact]
+    public void AdminAdvanceStatus_WhenAlreadyAtTarget_IsIdempotentNoOp()
+    {
+        var order = CreateOrder();
+        PayOrder(order);
+        order.TryAdvanceToShipped("TRACK-1", Principal, Now);
+        var eventCountBefore = order.Events.Count;
+
+        var result = order.AdminAdvanceStatus(OrderStatus.Shipped, "already shipped", Principal, Now);
+
+        result.IsSuccess.Should().BeTrue();
+        order.Events.Should().HaveCount(eventCountBefore, "advancing to the current status must not append an event");
+    }
+
+    [Fact]
+    public void AdminAdvanceStatus_IllegalTransition_ReturnsConflict()
+    {
+        var order = CreateOrder();
+        PayOrder(order); // Paid → Delivered is not a legal single-step transition
+
+        var result = order.AdminAdvanceStatus(OrderStatus.Delivered, "skip ahead", Principal, Now);
+
+        result.IsFailure.Should().BeTrue("Transition re-validates the legal-transition graph");
+        result.Error.Code.Should().Be("conflict");
+        order.Status.Should().Be(OrderStatus.Paid);
+    }
+
+    // ── Flow #7: RequestShipment ────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void RequestShipment_WhenPaid_SucceedsAndRecordsEvent_WithoutChangingStatus()
+    {
+        var order = CreateOrder();
+        PayOrder(order);
+
+        var result = order.RequestShipment(Principal, Now);
+
+        result.IsSuccess.Should().BeTrue();
+        order.Status.Should().Be(OrderStatus.Paid, "requesting shipment is intent only, not a state change");
+        order.Events.Should().Contain(e => e.EventType == "OrderShipmentRequested");
+    }
+
+    [Fact]
+    public void RequestShipment_WhenNotPaid_ReturnsConflict()
+    {
+        var order = CreateOrder(); // still Created
+
+        var result = order.RequestShipment(Principal, Now);
+
+        result.IsFailure.Should().BeTrue();
+        result.Error.Code.Should().Be("conflict");
+        order.Events.Should().NotContain(e => e.EventType == "OrderShipmentRequested");
+    }
 }

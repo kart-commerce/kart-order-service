@@ -41,6 +41,59 @@ public sealed class OrdersContractTests : IClassFixture<OrderApiFactory>
     }
 
     [Fact]
+    public void Contract_DefinesFlow7AdminPaths_WithExpectedOperations()
+    {
+        var contract = ContractLoader.Load();
+        var paths = (Dictionary<object, object>)contract["paths"];
+
+        // GET /v1/orders (admin list) added alongside the existing POST.
+        var ordersPath = (Dictionary<object, object>)paths["/v1/orders"];
+        Assert.True(ordersPath.ContainsKey("get"));
+        Assert.Equal("listOrders", ((Dictionary<object, object>)ordersPath["get"])["operationId"]);
+
+        Assert.True(paths.ContainsKey("/v1/orders/{id}/shipping-address"));
+        Assert.True(paths.ContainsKey("/v1/orders/{id}/status"));
+        Assert.True(paths.ContainsKey("/v1/orders/{id}/invoice"));
+        Assert.True(paths.ContainsKey("/v1/orders/{id}/request-shipment"));
+
+        Assert.True(((Dictionary<object, object>)paths["/v1/orders/{id}/shipping-address"]).ContainsKey("patch"));
+        Assert.True(((Dictionary<object, object>)paths["/v1/orders/{id}/status"]).ContainsKey("patch"));
+        Assert.True(((Dictionary<object, object>)paths["/v1/orders/{id}/invoice"]).ContainsKey("get"));
+        Assert.True(((Dictionary<object, object>)paths["/v1/orders/{id}/request-shipment"]).ContainsKey("post"));
+    }
+
+    [Fact]
+    public void Contract_OrderView_IncludesNullableShippingAddress_AndCancelRequestHasReason()
+    {
+        var contract = ContractLoader.Load();
+        var schemas = (Dictionary<object, object>)((Dictionary<object, object>)contract["components"])["schemas"];
+
+        var orderView = (Dictionary<object, object>)schemas["OrderView"];
+        var orderViewProps = (Dictionary<object, object>)orderView["properties"];
+        Assert.True(orderViewProps.ContainsKey("shippingAddress"));
+
+        Assert.True(schemas.ContainsKey("ShippingAddress"));
+        Assert.True(schemas.ContainsKey("PagedOrders"));
+        Assert.True(schemas.ContainsKey("Invoice"));
+
+        var cancelReq = (Dictionary<object, object>)schemas["CancelOrderRequest"];
+        var cancelReqProps = (Dictionary<object, object>)cancelReq["properties"];
+        Assert.True(cancelReqProps.ContainsKey("reason"));
+    }
+
+    [Fact]
+    public async Task LiveEndpoint_ListOrders_WithoutAdminRole_ReturnsForbidden()
+    {
+        var client = _factory.CreateClient();
+        var request = new HttpRequestMessage(HttpMethod.Get, "/v1/orders?page=1&pageSize=10");
+        request.Headers.Add("X-Test-Roles", "customer"); // authenticated, but not admin
+
+        var response = await client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
     public async Task LiveEndpoint_CreateOrder_MissingIdempotencyKey_DoesNotCrash()
     {
         var client = _factory.CreateClient();

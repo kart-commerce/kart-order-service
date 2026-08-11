@@ -57,6 +57,11 @@ public sealed class InventoryEventsConsumerHostedService(
 
     private async Task OnMessageReceivedAsync(IModel channel, BasicDeliverEventArgs args, CancellationToken stoppingToken)
     {
+        // Continue the W3C trace carried on the inbound message's headers (a trace that started in
+        // Inventory and flows into Order via this queue), so this consumer's work links to the
+        // original TraceId in Tempo/Loki instead of starting a disconnected root trace.
+        using var activity = RabbitMqTraceContext.StartConsumeActivity(QueueName, args.BasicProperties);
+
         try
         {
             using var scope = scopeFactory.CreateScope();

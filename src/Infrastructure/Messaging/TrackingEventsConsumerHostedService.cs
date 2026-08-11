@@ -66,6 +66,11 @@ public sealed class TrackingEventsConsumerHostedService(
 
     private async Task OnMessageReceivedAsync(IModel channel, BasicDeliverEventArgs args, CancellationToken stoppingToken)
     {
+        // Continue the W3C trace carried on the inbound message's headers (a trace that started in
+        // Delivery Tracking and flows into Order via this queue), so this consumer's work links to
+        // the original TraceId in Tempo/Loki instead of starting a disconnected root trace.
+        using var activity = RabbitMqTraceContext.StartConsumeActivity(QueueName, args.BasicProperties);
+
         try
         {
             var json = Encoding.UTF8.GetString(args.Body.Span);

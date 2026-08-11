@@ -60,10 +60,23 @@ public sealed class OrderReadModelProjectorHostedService(IServiceScopeFactory sc
             return;
         }
 
+        // Order Management (Admin) flow #7's real end-to-end run found this: when two events for
+        // the *same* order share an identical CreatedAt (a real possibility whenever a saga step
+        // advances a status immediately after the prior one — confirmed via a bulk-seeding tool
+        // that captures one `now` across several of an order's own transitions, but not
+        // structurally impossible for genuinely fast real transitions either), sorting by
+        // CreatedAt alone leaves their relative order to EF Core's owned-collection load, which is
+        // never guaranteed to match insertion/Sequence order. A later event applying its `$set`
+        // upsert before OrderCreated's own `SetOnInsert` upsert silently drops every SetOnInsert
+        // field (UserId/Items/TotalAmount/CreatedAt) for good, since SetOnInsert is a no-op once
+        // the document already exists. Sequence is this aggregate's own explicit, monotonic
+        // per-order ordering — ThenBy resolves the tie deterministically without changing anything
+        // when timestamps already differ (the common case).
         var pending = pendingOrders
             .SelectMany(o => o.Events)
             .Where(e => e.ProjectedAt == null)
             .OrderBy(e => e.CreatedAt)
+            .ThenBy(e => e.Sequence)
             .ToList();
 
         var now = DateTimeOffset.UtcNow;

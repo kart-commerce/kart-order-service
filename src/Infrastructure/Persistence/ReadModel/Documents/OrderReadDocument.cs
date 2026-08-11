@@ -16,9 +16,31 @@ public sealed class OrderReadDocument
 
     public MoneyReadDocument TotalAmount { get; set; } = new();
 
+    /// <summary>Flow #7: null until an admin sets one via `OrderShippingAddressUpdated`.</summary>
+    public ShippingAddressReadDocument? ShippingAddress { get; set; }
+
     public DateTimeOffset CreatedAt { get; set; }
 
     public DateTimeOffset UpdatedAt { get; set; }
+}
+
+public sealed class ShippingAddressReadDocument
+{
+    public string RecipientName { get; set; } = string.Empty;
+
+    public string Line1 { get; set; } = string.Empty;
+
+    public string? Line2 { get; set; }
+
+    public string City { get; set; } = string.Empty;
+
+    public string State { get; set; } = string.Empty;
+
+    public string PostalCode { get; set; } = string.Empty;
+
+    public string Country { get; set; } = string.Empty;
+
+    public string? Phone { get; set; }
 }
 
 public sealed class OrderLineItemReadDocument

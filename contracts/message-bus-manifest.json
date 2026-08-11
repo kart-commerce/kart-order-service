@@ -15,7 +15,10 @@
     { "eventType": "OrderConfirmed", "exchange": "order.exchange", "routingKey": "order.order.confirmed" },
     { "eventType": "OrderCancelled", "exchange": "order.exchange", "routingKey": "order.order.cancelled" },
     { "eventType": "OrderCompensationTriggered", "exchange": "order.exchange", "routingKey": "order.order.compensation-triggered" },
-    { "eventType": "OrderDelivered", "exchange": "order.exchange", "routingKey": "order.order.delivered" }
+    { "eventType": "OrderDelivered", "exchange": "order.exchange", "routingKey": "order.order.delivered" },
+    { "eventType": "OrderShippingAddressUpdated", "exchange": "order.exchange", "routingKey": "order.order.shipping-address-updated" },
+    { "eventType": "OrderStatusChangedByAdmin", "exchange": "order.exchange", "routingKey": "order.order.status-changed-by-admin" },
+    { "eventType": "OrderShipmentRequested", "exchange": "order.exchange", "routingKey": "order.order.shipment-requested" }
   ],
   "queues": [
     {

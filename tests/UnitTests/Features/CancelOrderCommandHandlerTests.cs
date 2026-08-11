@@ -5,6 +5,7 @@ using KartOrderService.Application.Common.Interfaces;
 using KartOrderService.Application.Features.CancelOrder;
 using KartOrderService.Domain.Orders;
 using KartOrderService.UnitTests.TestSupport;
+using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using Xunit;
 
@@ -27,7 +28,7 @@ public sealed class CancelOrderCommandHandlerTests
     }
 
     private CancelOrderCommandHandler CreateHandler() => new(
-        _orderRepository, _unitOfWork, new InventoryReleaseCompensator(_inventoryClient), _currentPrincipal, new FakeTimeProvider(Now), _auditLogWriter);
+        _orderRepository, _unitOfWork, new InventoryReleaseCompensator(_inventoryClient), _currentPrincipal, new FakeTimeProvider(Now), _auditLogWriter, NullLogger<CancelOrderCommandHandler>.Instance);
 
     private static Order NewOrder(Guid? reservationId = null) =>
         Order.Create(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid().ToString(),

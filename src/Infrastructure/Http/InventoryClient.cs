@@ -21,7 +21,7 @@ public sealed class InventoryClient(HttpClient httpClient, ILogger<InventoryClie
     {
         try
         {
-            var response = await httpClient.PostAsJsonAsync("/inventory/reserve", new { orderId, sku, qty }, cancellationToken);
+            var response = await httpClient.PostAsJsonAsync("/v1/inventory/reserve", new { orderId, sku, qty }, cancellationToken);
 
             if (response.StatusCode == HttpStatusCode.Created)
             {
@@ -48,7 +48,7 @@ public sealed class InventoryClient(HttpClient httpClient, ILogger<InventoryClie
     {
         try
         {
-            var response = await httpClient.PostAsJsonAsync("/inventory/release", new { reservationId }, cancellationToken);
+            var response = await httpClient.PostAsJsonAsync("/v1/inventory/release", new { reservationId }, cancellationToken);
             if (!response.IsSuccessStatusCode && response.StatusCode != HttpStatusCode.NotFound)
             {
                 logger.LogWarning("Inventory release for reservation {ReservationId} returned {StatusCode}.", reservationId, response.StatusCode);
