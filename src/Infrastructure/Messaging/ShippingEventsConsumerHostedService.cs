@@ -69,11 +69,12 @@ public sealed class ShippingEventsConsumerHostedService(
             var sender = scope.ServiceProvider.GetRequiredService<ISender>();
             var json = Encoding.UTF8.GetString(args.Body.Span);
 
-            var result = args.RoutingKey switch
+            var routingKey = RetryHeaders.GetEffectiveRoutingKey(args);
+            var result = routingKey switch
             {
                 "shipping.shipment.dispatched" => await sender.Send(ToDispatchedCommand(json), stoppingToken),
                 "shipping.shipment.creation-failed" => await sender.Send(ToCreationFailedCommand(json), stoppingToken),
-                _ => throw new InvalidOperationException($"Shipping-events consumer has no handling for routing key '{args.RoutingKey}'."),
+                _ => throw new InvalidOperationException($"Shipping-events consumer has no handling for routing key '{routingKey}'."),
             };
 
             if (result.IsFailure)
@@ -115,15 +116,16 @@ public sealed class ShippingEventsConsumerHostedService(
             var properties = channel.CreateBasicProperties();
             properties.Persistent = true;
             properties.Headers = new Dictionary<string, object> { [RetryCountHeader] = retryCount + 1 };
+            RetryHeaders.StampOriginalRoutingKey(properties.Headers, args);
 
             channel.BasicPublish(exchange: string.Empty, routingKey: tier.Name, basicProperties: properties, body: args.Body);
             channel.BasicAck(args.DeliveryTag, multiple: false);
 
-            logger.LogWarning(ex, "Handling shipping event ({RoutingKey}) failed; routed to retry tier {Tier} (attempt {Attempt}).", args.RoutingKey, tier.Name, retryCount + 1);
+            logger.LogWarning(ex, "Handling shipping event ({RoutingKey}) failed; routed to retry tier {Tier} (attempt {Attempt}).", RetryHeaders.GetEffectiveRoutingKey(args), tier.Name, retryCount + 1);
         }
         else
         {
-            logger.LogCritical(ex, "Handling shipping event ({RoutingKey}) failed after exhausting all retry tiers; dead-lettering.", args.RoutingKey);
+            logger.LogCritical(ex, "Handling shipping event ({RoutingKey}) failed after exhausting all retry tiers; dead-lettering.", RetryHeaders.GetEffectiveRoutingKey(args));
             channel.BasicNack(args.DeliveryTag, multiple: false, requeue: false);
         }
     }
