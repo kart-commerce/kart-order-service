@@ -26,7 +26,7 @@ public sealed class PaymentClient(HttpClient httpClient, ClientCredentialsTokenP
             };
             request.Headers.Add("Idempotency-Key", idempotencyKey);
 
-            var accessToken = await tokenProvider.GetAccessTokenAsync(cancellationToken);
+            var accessToken = await tokenProvider.GetAccessTokenAsync("Payment", "payment-compensation", cancellationToken);
             if (accessToken is not null)
             {
                 request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
