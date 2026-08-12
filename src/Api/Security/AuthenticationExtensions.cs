@@ -28,6 +28,11 @@ public static class AuthenticationExtensions
         services.AddOptions<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme)
             .Configure<JwksSigningKeyResolver>((options, resolver) =>
             {
+                // Defensively disable .NET's default inbound claim-type remapping so the raw "roles"
+                // claim name survives verbatim (the AdminOnly policy below matches on it literally) —
+                // the same claim-remapping gap closed in kart-category-service and other services.
+                options.MapInboundClaims = false;
+
                 options.TokenValidationParameters = new TokenValidationParameters
                 {
                     ValidateIssuer = false,

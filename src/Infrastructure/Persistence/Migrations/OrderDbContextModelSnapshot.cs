@@ -202,6 +202,11 @@ namespace KartOrderService.Infrastructure.Persistence.Migrations
                                 .HasColumnType("character varying(24)")
                                 .HasColumnName("to_status");
 
+                            b1.Property<string>("TraceParent")
+                                .HasMaxLength(64)
+                                .HasColumnType("character varying(64)")
+                                .HasColumnName("trace_parent");
+
                             b1.Property<DateTimeOffset>("UpdatedAt")
                                 .HasColumnType("timestamp with time zone")
                                 .HasColumnName("updated_at");
@@ -292,9 +297,62 @@ namespace KartOrderService.Infrastructure.Persistence.Migrations
                                 .HasForeignKey("OrderId");
                         });
 
+                    b.OwnsOne("KartOrderService.Domain.Orders.ShippingAddress", "ShippingAddress", b1 =>
+                        {
+                            b1.Property<Guid>("OrderId")
+                                .HasColumnType("uuid");
+
+                            b1.Property<string>("City")
+                                .IsRequired()
+                                .HasColumnType("text")
+                                .HasColumnName("shipping_city");
+
+                            b1.Property<string>("Country")
+                                .IsRequired()
+                                .HasColumnType("text")
+                                .HasColumnName("shipping_country");
+
+                            b1.Property<string>("Line1")
+                                .IsRequired()
+                                .HasColumnType("text")
+                                .HasColumnName("shipping_line1");
+
+                            b1.Property<string>("Line2")
+                                .HasColumnType("text")
+                                .HasColumnName("shipping_line2");
+
+                            b1.Property<string>("Phone")
+                                .HasColumnType("text")
+                                .HasColumnName("shipping_phone");
+
+                            b1.Property<string>("PostalCode")
+                                .IsRequired()
+                                .HasColumnType("text")
+                                .HasColumnName("shipping_postal_code");
+
+                            b1.Property<string>("RecipientName")
+                                .IsRequired()
+                                .HasColumnType("text")
+                                .HasColumnName("shipping_recipient_name");
+
+                            b1.Property<string>("State")
+                                .IsRequired()
+                                .HasColumnType("text")
+                                .HasColumnName("shipping_state");
+
+                            b1.HasKey("OrderId");
+
+                            b1.ToTable("orders");
+
+                            b1.WithOwner()
+                                .HasForeignKey("OrderId");
+                        });
+
                     b.Navigation("Events");
 
                     b.Navigation("LineItems");
+
+                    b.Navigation("ShippingAddress");
                 });
 #pragma warning restore 612, 618
         }

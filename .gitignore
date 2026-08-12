@@ -12,6 +12,10 @@ TestResults/
 .env.*
 !.env.example
 
+# Secrets file referenced by GlobalConfig:Path — must never live inside the repo,
+# but ignored here too as a defense-in-depth backstop.
+globalconfig.json
+
 # Per-developer local overrides (currently just GlobalConfig:Path) — machine-specific,
 # never committed. Commit appsettings.Local.json.example instead.
 appsettings.Local.json

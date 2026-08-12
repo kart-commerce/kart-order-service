@@ -7,6 +7,7 @@ using KartOrderService.Application.Common.Mapping;
 using KartOrderService.Application.Common.Models;
 using KartOrderService.Domain.Orders;
 using MediatR;
+using Microsoft.Extensions.Logging;
 
 namespace KartOrderService.Application.Features.CancelOrder;
 
@@ -24,13 +25,17 @@ public sealed class CancelOrderCommandHandler(
     InventoryReleaseCompensator compensator,
     ICurrentPrincipal currentPrincipal,
     TimeProvider timeProvider,
-    IAuditLogWriter auditLogWriter) : IRequestHandler<CancelOrderCommand, Result<OrderViewDto>>
+    IAuditLogWriter auditLogWriter,
+    ILogger<CancelOrderCommandHandler> logger) : IRequestHandler<CancelOrderCommand, Result<OrderViewDto>>
 {
     public async Task<Result<OrderViewDto>> Handle(CancelOrderCommand request, CancellationToken cancellationToken)
     {
         var actingPrincipal = currentPrincipal.ActingPrincipal;
         var kind = currentPrincipal.Kind;
         var now = timeProvider.GetUtcNow();
+        var reason = request.Reason ?? "client_cancel";
+
+        logger.LogInformation("Stage {Stage}: cancel requested for order {OrderId}", "CancelOrderHandlerStarted", request.OrderId);
 
         await unitOfWork.BeginPrincipalScopedTransactionAsync(actingPrincipal, kind, cancellationToken);
 
@@ -53,10 +58,10 @@ public sealed class CancelOrderCommandHandler(
             return Result.Failure<OrderViewDto>(Error.Conflict($"Order {request.OrderId} is already '{order.Status}' — cancellation is illegal from this state; use the returns/refund flow instead."));
         }
 
-        order.RecordCompensationTriggered("client_cancel", actingPrincipal, now);
+        order.RecordCompensationTriggered(reason, actingPrincipal, now);
         await compensator.ReleaseAllAsync(order, cancellationToken);
 
-        var cancelResult = order.TryCancel("client_cancel", actingPrincipal, now);
+        var cancelResult = order.TryCancel(reason, actingPrincipal, now);
         if (cancelResult.IsFailure)
         {
             await unitOfWork.RollbackTransactionAsync(cancellationToken);
@@ -71,8 +76,12 @@ public sealed class CancelOrderCommandHandler(
         catch (ConcurrencyConflictException)
         {
             await unitOfWork.RollbackTransactionAsync(cancellationToken);
+            logger.LogWarning("Stage {Stage}: concurrent writer moved order {OrderId} during cancel", "OrderConcurrencyConflictDetected", request.OrderId);
             return Result.Failure<OrderViewDto>(Error.Conflict("A concurrent writer already moved this order; please retry."));
         }
+
+        logger.LogInformation("Stage {Stage}: order {OrderId} cancelled and committed", "OrderPersistedToDatabase", order.OrderId);
+        logger.LogInformation("Stage {Stage}: OrderCancelled outbox event saved for order {OrderId}", "OrderCancelledOutboxEventSaved", order.OrderId);
 
         await auditLogWriter.WriteAsync(
             AuditLogEntry.Create("kart-order-service", actingPrincipal, kind, "order.cancelled", "Order", order.OrderId.ToString()),

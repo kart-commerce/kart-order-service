@@ -1,6 +1,6 @@
 {
-  "_comment": "Copy this file to appsettings.Local.json (gitignored) and fill in the absolute path to your own globalconfig.json. This is the one setting that varies per machine/OS.",
+  "_comment": "Copy this file to appsettings.Local.json (gitignored) and fill in the absolute path to your own kart-internals/globalconfig.json. This is the one setting that varies per machine/OS -- every service on the platform points at the SAME shared file, not a per-service one.",
   "GlobalConfig": {
-    "Path": "/absolute/path/to/your/kart-order-service/globalconfig.json"
+    "Path": "/absolute/path/to/your/kart-internals/globalconfig.json"
   }
 }

@@ -6,4 +6,7 @@ namespace KartOrderService.Application.Common.Interfaces;
 public interface IOrderReadRepository
 {
     Task<OrderViewDto?> GetByIdAsync(Guid orderId, CancellationToken cancellationToken);
+
+    /// <summary>Flow #7 admin list/search — filtered, paged, sorted by `CreatedAt` descending. Returns the page plus the total matching count.</summary>
+    Task<(IReadOnlyList<OrderSummaryDto> Items, long TotalCount)> SearchAsync(OrderSearchFilter filter, CancellationToken cancellationToken);
 }

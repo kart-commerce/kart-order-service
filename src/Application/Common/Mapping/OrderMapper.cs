@@ -12,5 +12,10 @@ public static class OrderMapper
         order.Status.ToString(),
         order.LineItems.Select(li => new OrderLineItemViewDto(li.Sku, li.Qty, new MoneyDto(li.UnitPrice, li.Currency))).ToList(),
         new MoneyDto(order.TotalAmount, order.Currency),
-        order.CreatedAt);
+        order.CreatedAt,
+        ToShippingAddressDto(order.ShippingAddress));
+
+    public static ShippingAddressDto? ToShippingAddressDto(ShippingAddress? address) => address is null
+        ? null
+        : new ShippingAddressDto(address.RecipientName, address.Line1, address.Line2, address.City, address.State, address.PostalCode, address.Country, address.Phone);
 }

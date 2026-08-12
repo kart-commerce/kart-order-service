@@ -51,6 +51,13 @@ public sealed class Order
     /// </summary>
     public string? TrackingId { get; private set; }
 
+    /// <summary>
+    /// Flow #7 (Order Management, Admin): the delivery address, attached/corrected by an admin while
+    /// the order has not yet shipped. Null on every order created before this field existed and on
+    /// any order for which no admin ever set one. An EF Core owned value object on the `orders` table.
+    /// </summary>
+    public ShippingAddress? ShippingAddress { get; private set; }
+
     public DateTimeOffset CreatedAt { get; private set; }
 
     public DateTimeOffset UpdatedAt { get; private set; }
@@ -255,6 +262,70 @@ public sealed class Order
         }
 
         return Transition(OrderStatus.Refunded, eventType: null, payload: null, actingPrincipal, now);
+    }
+
+    /// <summary>
+    /// Flow #7 (Order Management, Admin): attach/correct the delivery <paramref name="address"/> on an
+    /// order that has not yet shipped. Legal only while <see cref="Status"/> is NOT
+    /// <see cref="OrderStatus.Shipped"/>/<see cref="OrderStatus.Delivered"/>/<see cref="OrderStatus.Cancelled"/>/
+    /// <see cref="OrderStatus.Refunded"/> — past Shipped a courier label already exists against the old
+    /// address, so a correction there is a returns-flow concern, not an address edit. Does NOT change
+    /// <see cref="Status"/>; records an `OrderShippingAddressUpdated` event (published for downstream
+    /// consumers) and bumps <see cref="UpdatedAt"/>/<see cref="UpdatedBy"/>.
+    /// </summary>
+    public Result UpdateShippingAddress(ShippingAddress address, string actingPrincipal, DateTimeOffset now)
+    {
+        if (Status is OrderStatus.Shipped or OrderStatus.Delivered or OrderStatus.Cancelled or OrderStatus.Refunded)
+        {
+            return Result.Failure(Error.Conflict($"Order {OrderId} shipping address cannot be changed from status '{Status}' — a courier/label already exists past Shipped; use the returns/refund flow instead."));
+        }
+
+        ShippingAddress = address;
+        UpdatedAt = now;
+        UpdatedBy = actingPrincipal;
+
+        RecordEvent("OrderShippingAddressUpdated", new { orderId = OrderId, address }, actingPrincipal, now);
+        return Result.Success();
+    }
+
+    /// <summary>
+    /// Flow #7 (Order Management, Admin): an ops-recovery fallback letting an admin manually advance
+    /// <see cref="Status"/> when the normal event-driven trigger stalled — the same advances the
+    /// automated <see cref="Infrastructure.ReconciliationSweep.ReconciliationSweepHostedService"/>
+    /// performs, just admin-initiated and audited here. No-op success if already at
+    /// <paramref name="to"/>; otherwise defers to <c>Transition</c>, which itself re-validates
+    /// <see cref="OrderStatusTransitions.IsLegalTransition"/> and returns a <c>Conflict</c> for an
+    /// illegal move. Deliberately generic/reusable (no target restriction here, matching
+    /// <c>Transition</c>) — restricting the reachable targets to {Shipped, Delivered,
+    /// FulfillmentException} is a command-level policy decision, not an aggregate invariant.
+    /// </summary>
+    public Result AdminAdvanceStatus(OrderStatus to, string reason, string actingPrincipal, DateTimeOffset now)
+    {
+        if (Status == to)
+        {
+            return Result.Success();
+        }
+
+        return Transition(to, "OrderStatusChangedByAdmin", new { orderId = OrderId, fromStatus = Status.ToString(), toStatus = to.ToString(), reason }, actingPrincipal, now);
+    }
+
+    /// <summary>
+    /// Flow #7 (Order Management, Admin): records an admin's intent to request shipment for a paid
+    /// order, via an `OrderShipmentRequested` event — intent only, does NOT change <see cref="Status"/>.
+    /// Legal only while <see cref="Status"/> is <see cref="OrderStatus.Paid"/>. The eventual consumer
+    /// (`kart-shipping-service`, flow #8) does not exist yet, so today this call's sole job is to
+    /// durably record+publish the intent for whenever that consumer arrives — no downstream side
+    /// effect is expected yet, and that is intentional.
+    /// </summary>
+    public Result RequestShipment(string actingPrincipal, DateTimeOffset now)
+    {
+        if (Status != OrderStatus.Paid)
+        {
+            return Result.Failure(Error.Conflict($"Order {OrderId} must be 'Paid' to request shipment (current status '{Status}')."));
+        }
+
+        RecordEvent("OrderShipmentRequested", new { orderId = OrderId, requestedBy = actingPrincipal, requestedAt = now }, actingPrincipal, now);
+        return Result.Success();
     }
 
     /// <summary>Generic idempotent-advance: already-at-target ⇒ no-op success; wrong pre-state ⇒ Failure (caller's CAS-lost policy); otherwise transitions.</summary>

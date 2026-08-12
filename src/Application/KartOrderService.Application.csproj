@@ -8,7 +8,8 @@
     <PackageReference Include="FluentValidation" Version="11.10.0" />
     <PackageReference Include="FluentValidation.DependencyInjectionExtensions" Version="11.10.0" />
     <PackageReference Include="MediatR" Version="12.4.1" />
-    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.2" />
+    <!-- 10.0.0 to satisfy Serilog.AspNetCore 10.0.0's transitive floor (pulled in via Kart.Shared.Observability 0.3.0); confirmed safe on net8.0 across this platform. -->
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.0" />
     <PackageReference Include="Microsoft.Extensions.Options" Version="8.0.2" />
     <!-- IAuditLogWriter/AuditLogEntry — CancelOrder/ResolveFulfillmentException call it directly from their handlers. -->
     <PackageReference Include="Kart.Shared.Auditing" Version="0.1.0" />
