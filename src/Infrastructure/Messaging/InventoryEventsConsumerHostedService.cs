@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using Kart.Shared.Messaging;
+using Kart.Shared.Observability;
 using KartOrderService.Application.Features.AdvanceOnInventoryOutcome;
 using MediatR;
 using Microsoft.Extensions.DependencyInjection;
@@ -11,7 +12,7 @@ using RabbitMQ.Client.Events;
 
 namespace KartOrderService.Infrastructure.Messaging;
 
-/// <summary>ORD-6: consumes `order.inventory-events.queue` (bound to Inventory's `InventoryReserved`/`InventoryReservationFailed`).</summary>
+/// <summary>ORD-6: consumes `order.inventory-events.queue` (bound to Inventory's `InventoryReserved`/`InventoryReservationFailed`) — catalog flow #1's "Inventory Reserved" step.</summary>
 public sealed class InventoryEventsConsumerHostedService(
     IServiceScopeFactory scopeFactory,
     IConnectionFactory connectionFactory,
@@ -20,6 +21,9 @@ public sealed class InventoryEventsConsumerHostedService(
 {
     private const string QueueName = "order.inventory-events.queue";
     private const string RetryCountHeader = "x-order-inventory-events-retry-count";
+
+    /// <summary>Matches <see cref="Api.Controllers.OrdersController.ShoppingJourneyFlowName"/> — both routing keys this consumer handles are catalog flow #1's own "Inventory Reserved" saga step, triggered by ORD-1's synchronous reserve call.</summary>
+    private const string ShoppingJourneyFlowName = "NormalShoppingPurchaseJourney";
 
     private static readonly TimeSpan ReconnectDelay = TimeSpan.FromSeconds(10);
     private static readonly JsonSerializerOptions SerializerOptions = new(JsonSerializerDefaults.Web);
@@ -61,6 +65,7 @@ public sealed class InventoryEventsConsumerHostedService(
         // Inventory and flows into Order via this queue), so this consumer's work links to the
         // original TraceId in Tempo/Loki instead of starting a disconnected root trace.
         using var activity = RabbitMqTraceContext.StartConsumeActivity(QueueName, args.BasicProperties);
+        using var flowScope = KartFlowContext.Push(ShoppingJourneyFlowName);
 
         try
         {
@@ -68,11 +73,14 @@ public sealed class InventoryEventsConsumerHostedService(
             var sender = scope.ServiceProvider.GetRequiredService<ISender>();
             var json = Encoding.UTF8.GetString(args.Body.Span);
 
-            var result = args.RoutingKey switch
+            var routingKey = RetryHeaders.GetEffectiveRoutingKey(args);
+            logger.LogInformation("Stage {Stage}: inventory event consumed from {Queue} ({RoutingKey})", "InventoryEventConsumed", QueueName, routingKey);
+
+            var result = routingKey switch
             {
-                "inventory.reservation.reserved" => await sender.Send(ToReservedCommand(json), stoppingToken),
-                "inventory.reservation.failed" => await sender.Send(ToFailedCommand(json), stoppingToken),
-                _ => throw new InvalidOperationException($"Inventory-events consumer has no handling for routing key '{args.RoutingKey}'."),
+                "inventory.reservation.reserved" => await Dispatch(sender, ToReservedCommand(json), stoppingToken),
+                "inventory.reservation.failed" => await Dispatch(sender, ToFailedCommand(json), stoppingToken),
+                _ => throw new InvalidOperationException($"Inventory-events consumer has no handling for routing key '{routingKey}'."),
             };
 
             if (result.IsFailure)
@@ -87,6 +95,10 @@ public sealed class InventoryEventsConsumerHostedService(
             HandleFailure(channel, args, ex);
         }
     }
+
+    private static async Task<Kart.Shared.Domain.Result> Dispatch<TCommand>(ISender sender, TCommand command, CancellationToken cancellationToken)
+        where TCommand : MediatR.IRequest<Kart.Shared.Domain.Result> =>
+        await sender.Send(command, cancellationToken);
 
     private static ConsumeInventoryReservedCommand ToReservedCommand(string json)
     {
@@ -114,15 +126,16 @@ public sealed class InventoryEventsConsumerHostedService(
             var properties = channel.CreateBasicProperties();
             properties.Persistent = true;
             properties.Headers = new Dictionary<string, object> { [RetryCountHeader] = retryCount + 1 };
+            RetryHeaders.StampOriginalRoutingKey(properties.Headers, args);
 
             channel.BasicPublish(exchange: string.Empty, routingKey: tier.Name, basicProperties: properties, body: args.Body);
             channel.BasicAck(args.DeliveryTag, multiple: false);
 
-            logger.LogWarning(ex, "Handling inventory event ({RoutingKey}) failed; routed to retry tier {Tier} (attempt {Attempt}).", args.RoutingKey, tier.Name, retryCount + 1);
+            logger.LogWarning(ex, "Handling inventory event ({RoutingKey}) failed; routed to retry tier {Tier} (attempt {Attempt}).", RetryHeaders.GetEffectiveRoutingKey(args), tier.Name, retryCount + 1);
         }
         else
         {
-            logger.LogCritical(ex, "Handling inventory event ({RoutingKey}) failed after exhausting all retry tiers; dead-lettering.", args.RoutingKey);
+            logger.LogCritical(ex, "Handling inventory event ({RoutingKey}) failed after exhausting all retry tiers; dead-lettering.", RetryHeaders.GetEffectiveRoutingKey(args));
             channel.BasicNack(args.DeliveryTag, multiple: false, requeue: false);
         }
     }

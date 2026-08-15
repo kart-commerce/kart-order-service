@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using Kart.Shared.Messaging;
+using Kart.Shared.Observability;
 using KartOrderService.Application.Features.AdvanceOnShipmentDispatched;
 using KartOrderService.Application.Features.EnterFulfillmentException;
 using MediatR;
@@ -21,6 +22,17 @@ public sealed class ShippingEventsConsumerHostedService(
 {
     private const string QueueName = "order.shipping-events.queue";
     private const string RetryCountHeader = "x-order-shipping-events-retry-count";
+
+    /// <summary>
+    /// Matches <see cref="Api.Controllers.OrdersController.FlowName"/>. `ShipmentCreationFailed`
+    /// (ORD-11) is what actually puts an order into `FulfillmentException` — the escalation Flow #7's
+    /// "Handle Order Escalation" step exists to resolve — so this consumer's whole entry point is
+    /// tagged Order Management (Admin), the same pragmatic one-flow-per-consumer-entry simplification
+    /// <see cref="PaymentEventsConsumerHostedService"/> already uses for its own 3 routing keys.
+    /// `ShipmentDispatched` (ORD-9, informational `Paid→Shipped`) rides along under the same tag —
+    /// it belongs to catalog flow #3 (Shipping/Warehouse/Fulfillment Journey), out of this pass's scope.
+    /// </summary>
+    private const string FlowName = "OrderManagementAdmin";
 
     private static readonly TimeSpan ReconnectDelay = TimeSpan.FromSeconds(10);
     private static readonly JsonSerializerOptions SerializerOptions = new(JsonSerializerDefaults.Web);
@@ -62,6 +74,7 @@ public sealed class ShippingEventsConsumerHostedService(
         // Shipping and flows into Order via this queue), so this consumer's work links to the
         // original TraceId in Tempo/Loki instead of starting a disconnected root trace.
         using var activity = RabbitMqTraceContext.StartConsumeActivity(QueueName, args.BasicProperties);
+        using var flowScope = KartFlowContext.Push(FlowName);
 
         try
         {
@@ -69,11 +82,14 @@ public sealed class ShippingEventsConsumerHostedService(
             var sender = scope.ServiceProvider.GetRequiredService<ISender>();
             var json = Encoding.UTF8.GetString(args.Body.Span);
 
-            var result = args.RoutingKey switch
+            var routingKey = RetryHeaders.GetEffectiveRoutingKey(args);
+            logger.LogInformation("Stage {Stage}: shipping event consumed from {Queue} ({RoutingKey})", "ShippingEventConsumed", QueueName, routingKey);
+
+            var result = routingKey switch
             {
-                "shipping.shipment.dispatched" => await sender.Send(ToDispatchedCommand(json), stoppingToken),
-                "shipping.shipment.creation-failed" => await sender.Send(ToCreationFailedCommand(json), stoppingToken),
-                _ => throw new InvalidOperationException($"Shipping-events consumer has no handling for routing key '{args.RoutingKey}'."),
+                "shipping.shipment.dispatched" => await Dispatch(sender, ToDispatchedCommand(json), stoppingToken),
+                "shipping.shipment.creation-failed" => await Dispatch(sender, ToCreationFailedCommand(json), stoppingToken),
+                _ => throw new InvalidOperationException($"Shipping-events consumer has no handling for routing key '{routingKey}'."),
             };
 
             if (result.IsFailure)
@@ -88,6 +104,10 @@ public sealed class ShippingEventsConsumerHostedService(
             HandleFailure(channel, args, ex);
         }
     }
+
+    private static async Task<Kart.Shared.Domain.Result> Dispatch<TCommand>(ISender sender, TCommand command, CancellationToken cancellationToken)
+        where TCommand : MediatR.IRequest<Kart.Shared.Domain.Result> =>
+        await sender.Send(command, cancellationToken);
 
     private static ConsumeShipmentDispatchedCommand ToDispatchedCommand(string json)
     {
@@ -115,15 +135,16 @@ public sealed class ShippingEventsConsumerHostedService(
             var properties = channel.CreateBasicProperties();
             properties.Persistent = true;
             properties.Headers = new Dictionary<string, object> { [RetryCountHeader] = retryCount + 1 };
+            RetryHeaders.StampOriginalRoutingKey(properties.Headers, args);
 
             channel.BasicPublish(exchange: string.Empty, routingKey: tier.Name, basicProperties: properties, body: args.Body);
             channel.BasicAck(args.DeliveryTag, multiple: false);
 
-            logger.LogWarning(ex, "Handling shipping event ({RoutingKey}) failed; routed to retry tier {Tier} (attempt {Attempt}).", args.RoutingKey, tier.Name, retryCount + 1);
+            logger.LogWarning(ex, "Handling shipping event ({RoutingKey}) failed; routed to retry tier {Tier} (attempt {Attempt}).", RetryHeaders.GetEffectiveRoutingKey(args), tier.Name, retryCount + 1);
         }
         else
         {
-            logger.LogCritical(ex, "Handling shipping event ({RoutingKey}) failed after exhausting all retry tiers; dead-lettering.", args.RoutingKey);
+            logger.LogCritical(ex, "Handling shipping event ({RoutingKey}) failed after exhausting all retry tiers; dead-lettering.", RetryHeaders.GetEffectiveRoutingKey(args));
             channel.BasicNack(args.DeliveryTag, multiple: false, requeue: false);
         }
     }

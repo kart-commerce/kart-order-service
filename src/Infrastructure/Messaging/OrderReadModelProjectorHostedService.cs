@@ -1,3 +1,5 @@
+using Kart.Shared.Observability;
+using KartOrderService.Domain.Orders;
 using KartOrderService.Infrastructure.Persistence;
 using KartOrderService.Infrastructure.Persistence.ReadModel;
 using Microsoft.EntityFrameworkCore;
@@ -16,6 +18,10 @@ namespace KartOrderService.Infrastructure.Messaging;
 /// </summary>
 public sealed class OrderReadModelProjectorHostedService(IServiceScopeFactory scopeFactory, ILogger<OrderReadModelProjectorHostedService> logger) : BackgroundService
 {
+    private const string FlowName = "OrderManagementAdmin";
+    private const string ShoppingJourneyFlowName = "NormalShoppingPurchaseJourney";
+    private static readonly HashSet<string> ShoppingJourneyEventTypes = ["OrderCreated", "OrderConfirmed"];
+
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(2);
     private const int BatchSize = 100;
 
@@ -82,8 +88,27 @@ public sealed class OrderReadModelProjectorHostedService(IServiceScopeFactory sc
         var now = DateTimeOffset.UtcNow;
         foreach (var orderEvent in pending)
         {
+            // Named published events map to the flow that produced them (OrderCreated/OrderConfirmed
+            // -> the shopping journey, every other named event -> Order Management Admin, per this
+            // service's event-contract.md); an internal-only transition (EventType null — e.g.
+            // Created->Reserved, Paid->Shipped) gets no Flow tag rather than a guessed one.
+            var flow = orderEvent.EventType switch
+            {
+                null => (string?)null,
+                var t when ShoppingJourneyEventTypes.Contains(t) => ShoppingJourneyFlowName,
+                _ => FlowName,
+            };
+            using var flowScope = flow is null ? null : KartFlowContext.Push(flow);
+
             await writer.ApplyAsync(orderEvent, cancellationToken);
             orderEvent.MarkProjected(now);
+
+            logger.LogInformation(
+                "Stage {Stage}: read-model persisted for order {OrderId} ({ToStatus}, event {EventType})",
+                "OrderReadModelPersisted",
+                orderEvent.OrderId,
+                orderEvent.ToStatus,
+                orderEvent.EventType ?? "(internal)");
         }
 
         await dbContext.SaveChangesAsync(cancellationToken);

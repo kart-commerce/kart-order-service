@@ -12,6 +12,7 @@ public sealed class LoggingBehavior<TRequest, TResponse>(ILogger<LoggingBehavior
     {
         var requestName = typeof(TRequest).Name;
         var stopwatch = Stopwatch.StartNew();
+
         try
         {
             return await next();
