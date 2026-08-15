@@ -1,3 +1,4 @@
+using System.Linq;
 using Kart.Shared.Auditing;
 using Kart.Shared.Domain;
 using KartOrderService.Application.Common.Compensation;
@@ -43,21 +44,25 @@ public sealed class CancelOrderCommandHandler(
         if (order is null)
         {
             await unitOfWork.RollbackTransactionAsync(cancellationToken);
+            logger.LogWarning("Stage {Stage}: cancel rejected, order {OrderId} was not found", "CancelOrderNotFound", request.OrderId);
             return Result.Failure<OrderViewDto>(Error.NotFound($"Order {request.OrderId} was not found."));
         }
 
         if (order.Status == OrderStatus.Cancelled)
         {
             await unitOfWork.RollbackTransactionAsync(cancellationToken);
+            logger.LogInformation("Stage {Stage}: order {OrderId} already Cancelled — idempotent no-op", "OrderAlreadyCancelledBranch", order.OrderId);
             return Result.Success(OrderMapper.ToDto(order)); // idempotent no-op — nothing to save.
         }
 
         if (!OrderStatusTransitions.IsLegalTransition(order.Status, OrderStatus.Cancelled))
         {
             await unitOfWork.RollbackTransactionAsync(cancellationToken);
+            logger.LogWarning("Stage {Stage}: order {OrderId} is not cancellable from status '{Status}'", "OrderNotCancellableBranch", order.OrderId, order.Status);
             return Result.Failure<OrderViewDto>(Error.Conflict($"Order {request.OrderId} is already '{order.Status}' — cancellation is illegal from this state; use the returns/refund flow instead."));
         }
 
+        logger.LogInformation("Stage {Stage}: order {OrderId} is cancellable from status '{Status}'", "OrderCancellableBranch", order.OrderId, order.Status);
         order.RecordCompensationTriggered(reason, actingPrincipal, now);
         await compensator.ReleaseAllAsync(order, cancellationToken);
 
@@ -81,11 +86,21 @@ public sealed class CancelOrderCommandHandler(
         }
 
         logger.LogInformation("Stage {Stage}: order {OrderId} cancelled and committed", "OrderPersistedToDatabase", order.OrderId);
-        logger.LogInformation("Stage {Stage}: OrderCancelled outbox event saved for order {OrderId}", "OrderCancelledOutboxEventSaved", order.OrderId);
+
+        var cancelledEvent = order.Events.LastOrDefault(e => e.EventType == "OrderCancelled");
+        var compensationEvent = order.Events.LastOrDefault(e => e.EventType == "OrderCompensationTriggered");
+        logger.LogInformation(
+            "Stage {Stage}: outbox events {CompensationEventId} (OrderCompensationTriggered) and {CancelledEventId} (OrderCancelled) enqueued for order {OrderId}",
+            "OrderCancelledOutboxEventSaved",
+            compensationEvent?.Id,
+            cancelledEvent?.Id,
+            order.OrderId);
 
         await auditLogWriter.WriteAsync(
             AuditLogEntry.Create("kart-order-service", actingPrincipal, kind, "order.cancelled", "Order", order.OrderId.ToString()),
             cancellationToken);
+
+        logger.LogInformation("Stage {Stage}: order cancel process completed for order {OrderId}", "OrderCancelProcessCompleted", order.OrderId);
 
         return Result.Success(OrderMapper.ToDto(order));
     }

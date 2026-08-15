@@ -12,6 +12,17 @@ public sealed class LoggingBehavior<TRequest, TResponse>(ILogger<LoggingBehavior
     {
         var requestName = typeof(TRequest).Name;
         var stopwatch = Stopwatch.StartNew();
+
+        // checkpoint-logging-standard.md stage 3 ("<Command>HandlerStarted", first line inside
+        // Handle()) generalized here rather than duplicated in every handler — this behavior
+        // already wraps every MediatR request (commands, queries, and every Saga-consumer
+        // command dispatched from a RabbitMQ consumer), so it's the one place that's true by
+        // construction instead of by every handler author remembering to add it.
+        logger.LogInformation(
+            "Stage {Stage}: {RequestName} handler started",
+            $"{requestName}HandlerStarted",
+            requestName);
+
         try
         {
             return await next();

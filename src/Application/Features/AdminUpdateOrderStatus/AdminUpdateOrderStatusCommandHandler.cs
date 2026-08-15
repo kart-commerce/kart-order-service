@@ -1,3 +1,4 @@
+using System.Linq;
 using Kart.Shared.Auditing;
 using Kart.Shared.Domain;
 using KartOrderService.Application.Common.Exceptions;
@@ -37,13 +38,23 @@ public sealed class AdminUpdateOrderStatusCommandHandler(
         if (order is null)
         {
             await unitOfWork.RollbackTransactionAsync(cancellationToken);
+            logger.LogWarning("Stage {Stage}: admin status update rejected, order {OrderId} was not found", "AdminUpdateOrderStatusNotFound", request.OrderId);
             return Result.Failure<OrderViewDto>(Error.NotFound($"Order {request.OrderId} was not found."));
         }
+
+        var alreadyAtTarget = order.Status == request.TargetStatus;
+        logger.LogInformation(
+            alreadyAtTarget ? "Stage {Stage}: order {OrderId} already '{TargetStatus}' — idempotent no-op" : "Stage {Stage}: order {OrderId} admin-advancing '{Status}' -> '{TargetStatus}'",
+            alreadyAtTarget ? "AdminUpdateOrderStatusNoOpBranch" : "AdminUpdateOrderStatusAdvanceBranch",
+            order.OrderId,
+            alreadyAtTarget ? request.TargetStatus : order.Status,
+            request.TargetStatus);
 
         var advanceResult = order.AdminAdvanceStatus(request.TargetStatus, request.Reason, actingPrincipal, now);
         if (advanceResult.IsFailure)
         {
             await unitOfWork.RollbackTransactionAsync(cancellationToken);
+            logger.LogWarning("Stage {Stage}: order {OrderId} cannot admin-advance to '{TargetStatus}' — {Error}", "AdminUpdateOrderStatusIllegalTransition", order.OrderId, request.TargetStatus, advanceResult.Error.Message);
             return Result.Failure<OrderViewDto>(advanceResult.Error);
         }
 
@@ -60,11 +71,15 @@ public sealed class AdminUpdateOrderStatusCommandHandler(
         }
 
         logger.LogInformation("Stage {Stage}: order {OrderId} status advanced to {TargetStatus} and committed", "OrderPersistedToDatabase", order.OrderId, request.TargetStatus);
-        logger.LogInformation("Stage {Stage}: OrderStatusChangedByAdmin outbox event saved for order {OrderId}", "OrderStatusChangedByAdminOutboxEventSaved", order.OrderId);
+
+        var statusChangedEvent = order.Events.LastOrDefault(e => e.EventType == "OrderStatusChangedByAdmin");
+        logger.LogInformation("Stage {Stage}: outbox event {OutboxEventId} (OrderStatusChangedByAdmin) enqueued for order {OrderId}", "OrderStatusChangedByAdminOutboxEventSaved", statusChangedEvent?.Id, order.OrderId);
 
         await auditLogWriter.WriteAsync(
             AuditLogEntry.Create("kart-order-service", actingPrincipal, kind, "order.status.admin_updated", "Order", order.OrderId.ToString()),
             cancellationToken);
+
+        logger.LogInformation("Stage {Stage}: admin status update process completed for order {OrderId}", "AdminUpdateOrderStatusProcessCompleted", order.OrderId);
 
         return Result.Success(OrderMapper.ToDto(order));
     }

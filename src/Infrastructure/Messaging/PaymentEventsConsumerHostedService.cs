@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using Kart.Shared.Messaging;
+using Kart.Shared.Observability;
 using KartOrderService.Application.Features.CompensateOnPaymentFailed;
 using KartOrderService.Application.Features.ConfirmOrderOnPaymentCompleted;
 using KartOrderService.Application.Features.ReactToChargeback;
@@ -22,6 +23,7 @@ public sealed class PaymentEventsConsumerHostedService(
 {
     private const string QueueName = "order.payment-events.queue";
     private const string RetryCountHeader = "x-order-payment-events-retry-count";
+    private const string ShoppingJourneyFlowName = "NormalShoppingPurchaseJourney";
 
     private static readonly TimeSpan ReconnectDelay = TimeSpan.FromSeconds(10);
     private static readonly JsonSerializerOptions SerializerOptions = new(JsonSerializerDefaults.Web);
@@ -63,6 +65,7 @@ public sealed class PaymentEventsConsumerHostedService(
         // Payment and flows into Order via this queue), so this consumer's work links to the
         // original TraceId in Tempo/Loki instead of starting a disconnected root trace.
         using var activity = RabbitMqTraceContext.StartConsumeActivity(QueueName, args.BasicProperties);
+        using var flowScope = KartFlowContext.Push(ShoppingJourneyFlowName);
 
         try
         {
@@ -71,6 +74,8 @@ public sealed class PaymentEventsConsumerHostedService(
             var json = Encoding.UTF8.GetString(args.Body.Span);
 
             var routingKey = RetryHeaders.GetEffectiveRoutingKey(args);
+            logger.LogInformation("Stage {Stage}: payment event consumed from {Queue} ({RoutingKey})", "PaymentEventConsumed", QueueName, routingKey);
+
             var result = routingKey switch
             {
                 "payment.intent.completed" => await sender.Send(ToCompletedCommand(json), stoppingToken),
@@ -84,6 +89,7 @@ public sealed class PaymentEventsConsumerHostedService(
                 throw new InvalidOperationException($"Payment-event handling failed: {result.Error.Code} - {result.Error.Message}");
             }
 
+            logger.LogInformation("Stage {Stage}: order advanced after {RoutingKey}", "OrderAdvancedOnPaymentEvent", routingKey);
             channel.BasicAck(args.DeliveryTag, multiple: false);
         }
         catch (Exception ex)

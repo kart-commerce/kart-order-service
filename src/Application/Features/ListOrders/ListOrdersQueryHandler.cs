@@ -18,6 +18,7 @@ public sealed class ListOrdersQueryHandler(
         var filter = new OrderSearchFilter(request.Status, request.UserId, request.CreatedFrom, request.CreatedTo, request.Page, request.PageSize);
         var (items, totalCount) = await readRepository.SearchAsync(filter, cancellationToken);
 
+        logger.LogInformation("Stage {Stage}: order list served, {ReturnedCount} of {TotalCount} matching order(s)", "OrderListProcessCompleted", items.Count, totalCount);
         return Result.Success(new PagedOrdersDto(items, totalCount, request.Page, request.PageSize));
     }
 }

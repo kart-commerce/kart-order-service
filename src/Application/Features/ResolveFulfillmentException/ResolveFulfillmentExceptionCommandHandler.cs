@@ -1,3 +1,4 @@
+using System.Linq;
 using Kart.Shared.Auditing;
 using Kart.Shared.Domain;
 using KartOrderService.Application.Common.Compensation;
@@ -7,6 +8,7 @@ using KartOrderService.Application.Common.Mapping;
 using KartOrderService.Application.Common.Models;
 using KartOrderService.Domain.Orders;
 using MediatR;
+using Microsoft.Extensions.Logging;
 
 namespace KartOrderService.Application.Features.ResolveFulfillmentException;
 
@@ -26,7 +28,8 @@ public sealed class ResolveFulfillmentExceptionCommandHandler(
     IPaymentClient paymentClient,
     ICurrentPrincipal currentPrincipal,
     TimeProvider timeProvider,
-    IAuditLogWriter auditLogWriter) : IRequestHandler<ResolveFulfillmentExceptionCommand, Result<OrderViewDto>>
+    IAuditLogWriter auditLogWriter,
+    ILogger<ResolveFulfillmentExceptionCommandHandler> logger) : IRequestHandler<ResolveFulfillmentExceptionCommand, Result<OrderViewDto>>
 {
     public async Task<Result<OrderViewDto>> Handle(ResolveFulfillmentExceptionCommand request, CancellationToken cancellationToken)
     {
@@ -37,19 +40,31 @@ public sealed class ResolveFulfillmentExceptionCommandHandler(
         var order = await orderRepository.GetByIdAsync(request.OrderId, cancellationToken);
         if (order is null)
         {
+            logger.LogWarning("Stage {Stage}: fulfillment-exception resolve rejected, order {OrderId} was not found", "ResolveFulfillmentExceptionNotFound", request.OrderId);
             return Result.Failure<OrderViewDto>(Error.NotFound($"Order {request.OrderId} was not found."));
         }
 
         if (order.Status != OrderStatus.FulfillmentException)
         {
+            logger.LogWarning("Stage {Stage}: order {OrderId} is not in FulfillmentException (status '{Status}') — nothing to resolve", "ResolveFulfillmentExceptionNotEscalated", order.OrderId, order.Status);
             return Result.Failure<OrderViewDto>(Error.Conflict($"Order {request.OrderId} is not currently in FulfillmentException — nothing to resolve."));
         }
+
+        // Stage 5 decision branch — the admin's chosen resolution for a triggered fulfillment
+        // escalation: retry (retains the order, republishes OrderConfirmed) vs. cancel
+        // (compensates Inventory + refunds Payment, terminal Cancelled).
+        logger.LogInformation(
+            "Stage {Stage}: order {OrderId} escalation (FulfillmentException) resolved via '{Action}'",
+            "FulfillmentExceptionEscalationResolvedBranch",
+            order.OrderId,
+            request.Action);
 
         if (request.Action == "retry")
         {
             var retryResult = order.TryRetryFromFulfillmentException(actingPrincipal, now);
             if (retryResult.IsFailure)
             {
+                logger.LogWarning("Stage {Stage}: order {OrderId} retry-from-escalation failed — {Error}", "ResolveFulfillmentExceptionRetryFailed", order.OrderId, retryResult.Error.Message);
                 return Result.Failure<OrderViewDto>(retryResult.Error);
             }
         }
@@ -57,6 +72,7 @@ public sealed class ResolveFulfillmentExceptionCommandHandler(
         {
             if (order.PaymentIntentId is null)
             {
+                logger.LogWarning("Stage {Stage}: order {OrderId} has no captured PaymentIntentId — cannot issue a refund", "ResolveFulfillmentExceptionNoPaymentIntent", order.OrderId);
                 return Result.Failure<OrderViewDto>(Error.Conflict($"Order {request.OrderId} has no captured PaymentIntentId — cannot issue a refund."));
             }
 
@@ -68,12 +84,14 @@ public sealed class ResolveFulfillmentExceptionCommandHandler(
 
             if (refundResult.Outcome != PaymentRefundOutcome.Accepted)
             {
+                logger.LogWarning("Stage {Stage}: order {OrderId} cancel-via-escalation refund did not succeed; order remains in FulfillmentException", "ResolveFulfillmentExceptionRefundFailed", order.OrderId);
                 return Result.Failure<OrderViewDto>(Error.Custom("refund_failed", "The Payment refund call did not succeed; the order remains in FulfillmentException."));
             }
 
             var cancelResult = order.TryCancel("fulfillment_exception_cancel", actingPrincipal, now);
             if (cancelResult.IsFailure)
             {
+                logger.LogWarning("Stage {Stage}: order {OrderId} cancel-via-escalation failed after a successful refund — {Error}", "ResolveFulfillmentExceptionCancelFailed", order.OrderId, cancelResult.Error.Message);
                 return Result.Failure<OrderViewDto>(cancelResult.Error);
             }
         }
@@ -87,12 +105,24 @@ public sealed class ResolveFulfillmentExceptionCommandHandler(
         catch (ConcurrencyConflictException)
         {
             await unitOfWork.RollbackTransactionAsync(cancellationToken);
+            logger.LogWarning("Stage {Stage}: concurrent writer moved order {OrderId} during escalation resolution", "OrderConcurrencyConflictDetected", request.OrderId);
             return Result.Failure<OrderViewDto>(Error.Conflict("A concurrent writer already moved this order; please retry."));
         }
+
+        var outboxEventType = request.Action == "retry" ? "OrderConfirmed" : "OrderCancelled";
+        var outboxEvent = order.Events.LastOrDefault(e => e.EventType == outboxEventType);
+        logger.LogInformation(
+            "Stage {Stage}: order {OrderId} persisted, outbox event {OutboxEventId} ({EventType}) enqueued",
+            "OrderPersistedOutboxEventEnqueued",
+            order.OrderId,
+            outboxEvent?.Id,
+            outboxEventType);
 
         await auditLogWriter.WriteAsync(
             AuditLogEntry.Create("kart-order-service", actingPrincipal, kind, $"order.fulfillment_exception.{request.Action}", "Order", order.OrderId.ToString()),
             cancellationToken);
+
+        logger.LogInformation("Stage {Stage}: escalation resolution ('{Action}') process completed for order {OrderId}", "ResolveFulfillmentExceptionProcessCompleted", request.Action, order.OrderId);
 
         return Result.Success(OrderMapper.ToDto(order));
     }

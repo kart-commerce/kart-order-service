@@ -1,3 +1,4 @@
+using System.Linq;
 using Kart.Shared.Auditing;
 using Kart.Shared.Domain;
 using KartOrderService.Application.Common.Exceptions;
@@ -38,6 +39,7 @@ public sealed class UpdateOrderShippingAddressCommandHandler(
         if (order is null)
         {
             await unitOfWork.RollbackTransactionAsync(cancellationToken);
+            logger.LogWarning("Stage {Stage}: shipping-address update rejected, order {OrderId} was not found", "UpdateOrderShippingAddressNotFound", request.OrderId);
             return Result.Failure<OrderViewDto>(Error.NotFound($"Order {request.OrderId} was not found."));
         }
 
@@ -46,6 +48,7 @@ public sealed class UpdateOrderShippingAddressCommandHandler(
         if (updateResult.IsFailure)
         {
             await unitOfWork.RollbackTransactionAsync(cancellationToken);
+            logger.LogWarning("Stage {Stage}: order {OrderId} shipping address cannot be changed from status '{Status}'", "UpdateOrderShippingAddressNotEligible", order.OrderId, order.Status);
             return Result.Failure<OrderViewDto>(updateResult.Error);
         }
 
@@ -62,11 +65,15 @@ public sealed class UpdateOrderShippingAddressCommandHandler(
         }
 
         logger.LogInformation("Stage {Stage}: shipping address persisted for order {OrderId}", "OrderPersistedToDatabase", order.OrderId);
-        logger.LogInformation("Stage {Stage}: OrderShippingAddressUpdated outbox event saved for order {OrderId}", "OrderShippingAddressUpdatedOutboxEventSaved", order.OrderId);
+
+        var addressUpdatedEvent = order.Events.LastOrDefault(e => e.EventType == "OrderShippingAddressUpdated");
+        logger.LogInformation("Stage {Stage}: outbox event {OutboxEventId} (OrderShippingAddressUpdated) enqueued for order {OrderId}", "OrderShippingAddressUpdatedOutboxEventSaved", addressUpdatedEvent?.Id, order.OrderId);
 
         await auditLogWriter.WriteAsync(
             AuditLogEntry.Create("kart-order-service", actingPrincipal, kind, "order.shipping_address.updated", "Order", order.OrderId.ToString()),
             cancellationToken);
+
+        logger.LogInformation("Stage {Stage}: shipping-address update process completed for order {OrderId}", "UpdateOrderShippingAddressProcessCompleted", order.OrderId);
 
         return Result.Success(OrderMapper.ToDto(order));
     }

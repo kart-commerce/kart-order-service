@@ -25,6 +25,11 @@ public sealed class OrdersController(ISender sender, ILogger<OrdersController> l
 {
     private const string FlowName = "OrderManagementAdmin";
 
+    /// <summary>ORD-1's `Create` action is the customer's own checkout completing (catalog flow
+    /// #1's "Order Creation" step), not an admin action on an existing order — every other action
+    /// in this controller stays tagged <see cref="FlowName"/>.</summary>
+    private const string ShoppingJourneyFlowName = "NormalShoppingPurchaseJourney";
+
     /// <summary>ORD-1: api-contract.yaml `POST /v1/orders` — requires `Idempotency-Key`. Synchronously reserves Inventory per line item before returning `202`.</summary>
     [HttpPost]
     [ProducesResponseType(typeof(OrderViewDto), StatusCodes.Status202Accepted)]
@@ -36,11 +41,21 @@ public sealed class OrdersController(ISender sender, ILogger<OrdersController> l
         [FromHeader(Name = "Idempotency-Key")] string idempotencyKey,
         CancellationToken cancellationToken)
     {
+        using var _ = KartFlowContext.Push(ShoppingJourneyFlowName);
+        logger.LogInformation("Stage {Stage}: order create request received for user {UserId}", "OrderCreateRequestReceived", request.UserId);
+
         var items = request.Items
             .Select(i => new CreateOrderLineItemRequest(i.Sku, i.Qty, i.UnitPrice.Amount))
             .ToList();
 
+        logger.LogInformation("Stage {Stage}: dispatching CreateOrderCommand for user {UserId} ({ItemCount} line items)", "CreateOrderCommandDispatched", request.UserId, items.Count);
         var result = await sender.Send(new CreateOrderCommand(idempotencyKey, request.UserId, items, request.Currency), cancellationToken);
+
+        if (result.IsSuccess)
+        {
+            logger.LogInformation("Stage {Stage}: order {OrderId} created for user {UserId}", "OrderPersistedToDatabase", result.Value.OrderId, request.UserId);
+        }
+
         return this.ToActionResult<OrderViewDto, OrderViewDto>(result, dto => Accepted(dto));
     }
 
@@ -62,6 +77,7 @@ public sealed class OrdersController(ISender sender, ILogger<OrdersController> l
         using var _ = KartFlowContext.Push(FlowName);
         logger.LogInformation("Stage {Stage}: order list requested (status={Status}, userId={UserId}, page={Page})", "OrderListRequested", status, userId, page);
 
+        logger.LogInformation("Stage {Stage}: dispatching ListOrdersQuery (status={Status}, userId={UserId}, page={Page})", "ListOrdersQueryDispatched", status, userId, page);
         var result = await sender.Send(new ListOrdersQuery(status, userId, createdFrom, createdTo, page, pageSize), cancellationToken);
         return this.ToActionResult<PagedOrdersDto, PagedOrdersDto>(result, dto => Ok(dto));
     }
@@ -75,6 +91,7 @@ public sealed class OrdersController(ISender sender, ILogger<OrdersController> l
         using var _ = KartFlowContext.Push(FlowName);
         logger.LogInformation("Stage {Stage}: order detail requested for {OrderId}", "OrderDetailRequested", id);
 
+        logger.LogInformation("Stage {Stage}: dispatching GetOrderQuery for order {OrderId}", "GetOrderQueryDispatched", id);
         var result = await sender.Send(new GetOrderQuery(id), cancellationToken);
         return this.ToActionResult<OrderViewDto, OrderViewDto>(result, dto => Ok(dto));
     }
@@ -93,6 +110,7 @@ public sealed class OrdersController(ISender sender, ILogger<OrdersController> l
         using var _ = KartFlowContext.Push(FlowName);
         logger.LogInformation("Stage {Stage}: cancel requested for order {OrderId}", "OrderCancelRequested", id);
 
+        logger.LogInformation("Stage {Stage}: dispatching CancelOrderCommand for order {OrderId}", "CancelOrderCommandDispatched", id);
         var result = await sender.Send(new CancelOrderCommand(id, idempotencyKey, request?.Reason), cancellationToken);
         return this.ToActionResult<OrderViewDto, OrderViewDto>(result, dto => Ok(dto));
     }
@@ -117,6 +135,7 @@ public sealed class OrdersController(ISender sender, ILogger<OrdersController> l
             id, request.RecipientName, request.Line1, request.Line2, request.City,
             request.State, request.PostalCode, request.Country, request.Phone, idempotencyKey);
 
+        logger.LogInformation("Stage {Stage}: dispatching UpdateOrderShippingAddressCommand for order {OrderId}", "UpdateOrderShippingAddressCommandDispatched", id);
         var result = await sender.Send(command, cancellationToken);
         return this.ToActionResult<OrderViewDto, OrderViewDto>(result, dto => Ok(dto));
     }
@@ -140,9 +159,11 @@ public sealed class OrdersController(ISender sender, ILogger<OrdersController> l
 
         if (!Enum.TryParse<OrderStatus>(request.TargetStatus, ignoreCase: true, out var targetStatus))
         {
+            logger.LogWarning("Stage {Stage}: status update rejected for order {OrderId} — '{TargetStatus}' is not a recognized order status", "OrderStatusUpdateValidationFailed", id, request.TargetStatus);
             return this.MapFailure(Kart.Shared.Domain.Error.Custom("validation_error", $"'{request.TargetStatus}' is not a recognized order status."));
         }
 
+        logger.LogInformation("Stage {Stage}: dispatching AdminUpdateOrderStatusCommand for order {OrderId} -> {TargetStatus}", "AdminUpdateOrderStatusCommandDispatched", id, targetStatus);
         var result = await sender.Send(new AdminUpdateOrderStatusCommand(id, targetStatus, request.Reason, idempotencyKey), cancellationToken);
         return this.ToActionResult<OrderViewDto, OrderViewDto>(result, dto => Ok(dto));
     }
@@ -159,6 +180,7 @@ public sealed class OrdersController(ISender sender, ILogger<OrdersController> l
         using var _ = KartFlowContext.Push(FlowName);
         logger.LogInformation("Stage {Stage}: invoice requested for order {OrderId}", "OrderInvoiceRequested", id);
 
+        logger.LogInformation("Stage {Stage}: dispatching GenerateInvoiceQuery for order {OrderId}", "GenerateInvoiceQueryDispatched", id);
         var result = await sender.Send(new GenerateInvoiceQuery(id), cancellationToken);
         return this.ToActionResult<InvoiceDto, InvoiceDto>(result, dto => Ok(dto));
     }
@@ -178,6 +200,7 @@ public sealed class OrdersController(ISender sender, ILogger<OrdersController> l
         using var _ = KartFlowContext.Push(FlowName);
         logger.LogInformation("Stage {Stage}: shipment request received for order {OrderId}", "OrderShipmentRequestReceived", id);
 
+        logger.LogInformation("Stage {Stage}: dispatching RequestShipmentCommand for order {OrderId}", "RequestShipmentCommandDispatched", id);
         var result = await sender.Send(new RequestShipmentCommand(id, idempotencyKey), cancellationToken);
         return this.ToActionResult<OrderViewDto, OrderViewDto>(result, dto => Ok(dto));
     }
@@ -198,6 +221,7 @@ public sealed class OrdersController(ISender sender, ILogger<OrdersController> l
         using var _ = KartFlowContext.Push(FlowName);
         logger.LogInformation("Stage {Stage}: fulfillment-exception resolve requested for order {OrderId} (action={Action})", "OrderFulfillmentExceptionResolveRequested", id, request.Action);
 
+        logger.LogInformation("Stage {Stage}: dispatching ResolveFulfillmentExceptionCommand for order {OrderId} (action={Action})", "ResolveFulfillmentExceptionCommandDispatched", id, request.Action);
         var result = await sender.Send(new ResolveFulfillmentExceptionCommand(id, request.Action, idempotencyKey), cancellationToken);
         return this.ToActionResult<OrderViewDto, OrderViewDto>(result, dto => Ok(dto));
     }

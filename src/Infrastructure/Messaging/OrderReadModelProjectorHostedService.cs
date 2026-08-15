@@ -1,3 +1,5 @@
+using Kart.Shared.Observability;
+using KartOrderService.Domain.Orders;
 using KartOrderService.Infrastructure.Persistence;
 using KartOrderService.Infrastructure.Persistence.ReadModel;
 using Microsoft.EntityFrameworkCore;
@@ -13,9 +15,29 @@ namespace KartOrderService.Infrastructure.Messaging;
 /// Read Model section: the projector needs every `order_events` transition row, not just the
 /// subset with a published `event_type`, so it reads `order_events` directly via its own
 /// `projected_at` progress marker (addendum #2), independent of the Outbox poller's `published_at`.
+///
+/// <para>
+/// checkpoint-logging-standard.md stage 11 gap-closure: this is the same shape as
+/// kart-user-service's <c>ReadModelProjectionHostedService</c> (an in-process poller, not a
+/// RabbitMQ consumer, on an async context unrelated to the original request) — the Flow tag is
+/// pushed per-row here, derived from <see cref="OrderEvent.EventType"/> the same way the Outbox
+/// relay derives it. Unlike that reference gap-closure, this does NOT yet re-parent an Activity
+/// off <see cref="OrderEvent.TraceParent"/> (the column already exists — added alongside
+/// `ShippingAddress` in the `AddShippingAddressAndTraceParent` migration — and is used for exactly
+/// this purpose by <see cref="OutboxRelayHostedService"/>'s publish span): doing so for a *third*
+/// named `ActivitySource` requires registering it in `Kart.Shared.Observability`'s tracer
+/// (`ObservabilityExtensions.AddSource`, mirroring `"Kart.User.ReadModelProjection"`), which is a
+/// versioned NuGet package this service consumes (`Kart.Shared.Observability 0.3.0`) rather than a
+/// project reference — out of this repo's own scope. Logged here rather than silently done partway;
+/// the Flow tag alone is still correct and useful in Loki even without the linked Tempo span.
+/// </para>
 /// </summary>
 public sealed class OrderReadModelProjectorHostedService(IServiceScopeFactory scopeFactory, ILogger<OrderReadModelProjectorHostedService> logger) : BackgroundService
 {
+    private const string FlowName = "OrderManagementAdmin";
+    private const string ShoppingJourneyFlowName = "NormalShoppingPurchaseJourney";
+    private static readonly HashSet<string> ShoppingJourneyEventTypes = ["OrderCreated", "OrderConfirmed"];
+
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(2);
     private const int BatchSize = 100;
 
@@ -82,8 +104,34 @@ public sealed class OrderReadModelProjectorHostedService(IServiceScopeFactory sc
         var now = DateTimeOffset.UtcNow;
         foreach (var orderEvent in pending)
         {
+            // Stage 11 Flow derivation: named published events map to the flow that produced them
+            // (OrderCreated/OrderConfirmed -> the shopping journey, every other named event ->
+            // Order Management Admin, per this service's event-contract.md); an internal-only
+            // transition (EventType null — e.g. Created->Reserved, Paid->Shipped) gets no Flow tag
+            // rather than a guessed one.
+            var flow = orderEvent.EventType switch
+            {
+                null => (string?)null,
+                var t when ShoppingJourneyEventTypes.Contains(t) => ShoppingJourneyFlowName,
+                _ => FlowName,
+            };
+            using var flowScope = flow is null ? null : KartFlowContext.Push(flow);
+
+            logger.LogInformation(
+                "Stage {Stage}: read-model write started for order {OrderId} ({ToStatus}, event {EventType})",
+                "OrderReadModelWriteStarted",
+                orderEvent.OrderId,
+                orderEvent.ToStatus,
+                orderEvent.EventType ?? "(internal)");
+
             await writer.ApplyAsync(orderEvent, cancellationToken);
             orderEvent.MarkProjected(now);
+
+            logger.LogInformation(
+                "Stage {Stage}: read-model persisted for order {OrderId} ({ToStatus})",
+                "OrderReadModelPersisted",
+                orderEvent.OrderId,
+                orderEvent.ToStatus);
         }
 
         await dbContext.SaveChangesAsync(cancellationToken);
