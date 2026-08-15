@@ -78,8 +78,8 @@ public sealed class InventoryEventsConsumerHostedService(
 
             var result = routingKey switch
             {
-                "inventory.reservation.reserved" => await Dispatch(sender, ToReservedCommand(json), "ConsumeInventoryReservedCommand", stoppingToken),
-                "inventory.reservation.failed" => await Dispatch(sender, ToFailedCommand(json), "ConsumeInventoryReservationFailedCommand", stoppingToken),
+                "inventory.reservation.reserved" => await Dispatch(sender, ToReservedCommand(json), stoppingToken),
+                "inventory.reservation.failed" => await Dispatch(sender, ToFailedCommand(json), stoppingToken),
                 _ => throw new InvalidOperationException($"Inventory-events consumer has no handling for routing key '{routingKey}'."),
             };
 
@@ -96,14 +96,9 @@ public sealed class InventoryEventsConsumerHostedService(
         }
     }
 
-    private async Task<Kart.Shared.Domain.Result> Dispatch<TCommand>(ISender sender, TCommand command, string commandName, CancellationToken cancellationToken)
-        where TCommand : MediatR.IRequest<Kart.Shared.Domain.Result>
-    {
-        // Stage 10 ("<NestedCommand>Dispatched") — the consumer's own dispatch of its internal
-        // MediatR command, distinct from stage 9 (the RabbitMQ-level EventConsumed line above).
-        logger.LogInformation("Stage {Stage}: dispatching {CommandName} from {Queue}", $"{commandName}Dispatched", commandName, QueueName);
-        return await sender.Send(command, cancellationToken);
-    }
+    private static async Task<Kart.Shared.Domain.Result> Dispatch<TCommand>(ISender sender, TCommand command, CancellationToken cancellationToken)
+        where TCommand : MediatR.IRequest<Kart.Shared.Domain.Result> =>
+        await sender.Send(command, cancellationToken);
 
     private static ConsumeInventoryReservedCommand ToReservedCommand(string json)
     {

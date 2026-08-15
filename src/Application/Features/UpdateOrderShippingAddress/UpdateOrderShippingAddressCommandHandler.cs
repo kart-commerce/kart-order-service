@@ -64,16 +64,17 @@ public sealed class UpdateOrderShippingAddressCommandHandler(
             return Result.Failure<OrderViewDto>(Error.Conflict("A concurrent writer already moved this order; please retry."));
         }
 
-        logger.LogInformation("Stage {Stage}: shipping address persisted for order {OrderId}", "OrderPersistedToDatabase", order.OrderId);
-
         var addressUpdatedEvent = order.Events.LastOrDefault(e => e.EventType == "OrderShippingAddressUpdated");
-        logger.LogInformation("Stage {Stage}: outbox event {OutboxEventId} (OrderShippingAddressUpdated) enqueued for order {OrderId}", "OrderShippingAddressUpdatedOutboxEventSaved", addressUpdatedEvent?.Id, order.OrderId);
 
         await auditLogWriter.WriteAsync(
             AuditLogEntry.Create("kart-order-service", actingPrincipal, kind, "order.shipping_address.updated", "Order", order.OrderId.ToString()),
             cancellationToken);
 
-        logger.LogInformation("Stage {Stage}: shipping-address update process completed for order {OrderId}", "UpdateOrderShippingAddressProcessCompleted", order.OrderId);
+        logger.LogInformation(
+            "Stage {Stage}: shipping address updated for order {OrderId}, outbox event {OutboxEventId} (OrderShippingAddressUpdated) enqueued",
+            "UpdateOrderShippingAddressProcessCompleted",
+            order.OrderId,
+            addressUpdatedEvent?.Id);
 
         return Result.Success(OrderMapper.ToDto(order));
     }

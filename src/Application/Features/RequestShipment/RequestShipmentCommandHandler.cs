@@ -64,16 +64,17 @@ public sealed class RequestShipmentCommandHandler(
             return Result.Failure<OrderViewDto>(Error.Conflict("A concurrent writer already moved this order; please retry."));
         }
 
-        logger.LogInformation("Stage {Stage}: shipment request persisted for order {OrderId}", "OrderPersistedToDatabase", order.OrderId);
-
         var shipmentRequestedEvent = order.Events.LastOrDefault(e => e.EventType == "OrderShipmentRequested");
-        logger.LogInformation("Stage {Stage}: outbox event {OutboxEventId} (OrderShipmentRequested) enqueued for order {OrderId}", "OrderShipmentRequestedOutboxEventSaved", shipmentRequestedEvent?.Id, order.OrderId);
 
         await auditLogWriter.WriteAsync(
             AuditLogEntry.Create("kart-order-service", actingPrincipal, kind, "order.shipment_requested", "Order", order.OrderId.ToString()),
             cancellationToken);
 
-        logger.LogInformation("Stage {Stage}: shipment request process completed for order {OrderId}", "RequestShipmentProcessCompleted", order.OrderId);
+        logger.LogInformation(
+            "Stage {Stage}: shipment request persisted for order {OrderId}, outbox event {OutboxEventId} (OrderShipmentRequested) enqueued",
+            "RequestShipmentProcessCompleted",
+            order.OrderId,
+            shipmentRequestedEvent?.Id);
 
         return Result.Success(OrderMapper.ToDto(order));
     }

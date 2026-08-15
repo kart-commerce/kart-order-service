@@ -23,8 +23,6 @@ public sealed class GenerateInvoiceQueryHandler(
 
     public async Task<Result<InvoiceDto>> Handle(GenerateInvoiceQuery request, CancellationToken cancellationToken)
     {
-        logger.LogInformation("Stage {Stage}: invoice requested for order {OrderId}", "GenerateInvoiceHandlerStarted", request.OrderId);
-
         var order = await readRepository.GetByIdAsync(request.OrderId, cancellationToken);
         if (order is null)
         {

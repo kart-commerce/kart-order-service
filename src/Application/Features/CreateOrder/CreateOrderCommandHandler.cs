@@ -98,12 +98,11 @@ public sealed class CreateOrderCommandHandler(
 
         var orderCreatedEvent = order.Events.Single(e => e.EventType == "OrderCreated");
         logger.LogInformation(
-            "Stage {Stage}: order {OrderId} persisted, outbox event {OutboxEventId} (OrderCreated) enqueued",
-            "OrderPersistedOutboxEventEnqueued",
+            "Stage {Stage}: order {OrderId} created for user {UserId}, outbox event {OutboxEventId} (OrderCreated) enqueued",
+            "OrderCreateProcessCompleted",
             order.OrderId,
+            order.UserId,
             orderCreatedEvent.Id);
-
-        logger.LogInformation("Stage {Stage}: order create process completed for order {OrderId}, user {UserId}", "OrderCreateProcessCompleted", order.OrderId, order.UserId);
 
         return Result.Success(OrderMapper.ToDto(order));
     }

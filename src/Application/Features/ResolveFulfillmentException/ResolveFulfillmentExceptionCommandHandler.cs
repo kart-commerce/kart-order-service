@@ -50,9 +50,9 @@ public sealed class ResolveFulfillmentExceptionCommandHandler(
             return Result.Failure<OrderViewDto>(Error.Conflict($"Order {request.OrderId} is not currently in FulfillmentException — nothing to resolve."));
         }
 
-        // Stage 5 decision branch — the admin's chosen resolution for a triggered fulfillment
-        // escalation: retry (retains the order, republishes OrderConfirmed) vs. cancel
-        // (compensates Inventory + refunds Payment, terminal Cancelled).
+        // The admin's chosen resolution for a triggered fulfillment escalation: retry (retains
+        // the order, republishes OrderConfirmed) vs. cancel (compensates Inventory + refunds
+        // Payment, terminal Cancelled).
         logger.LogInformation(
             "Stage {Stage}: order {OrderId} escalation (FulfillmentException) resolved via '{Action}'",
             "FulfillmentExceptionEscalationResolvedBranch",
@@ -111,18 +111,18 @@ public sealed class ResolveFulfillmentExceptionCommandHandler(
 
         var outboxEventType = request.Action == "retry" ? "OrderConfirmed" : "OrderCancelled";
         var outboxEvent = order.Events.LastOrDefault(e => e.EventType == outboxEventType);
-        logger.LogInformation(
-            "Stage {Stage}: order {OrderId} persisted, outbox event {OutboxEventId} ({EventType}) enqueued",
-            "OrderPersistedOutboxEventEnqueued",
-            order.OrderId,
-            outboxEvent?.Id,
-            outboxEventType);
 
         await auditLogWriter.WriteAsync(
             AuditLogEntry.Create("kart-order-service", actingPrincipal, kind, $"order.fulfillment_exception.{request.Action}", "Order", order.OrderId.ToString()),
             cancellationToken);
 
-        logger.LogInformation("Stage {Stage}: escalation resolution ('{Action}') process completed for order {OrderId}", "ResolveFulfillmentExceptionProcessCompleted", request.Action, order.OrderId);
+        logger.LogInformation(
+            "Stage {Stage}: escalation resolution ('{Action}') completed for order {OrderId}, outbox event {OutboxEventId} ({EventType}) enqueued",
+            "ResolveFulfillmentExceptionProcessCompleted",
+            request.Action,
+            order.OrderId,
+            outboxEvent?.Id,
+            outboxEventType);
 
         return Result.Success(OrderMapper.ToDto(order));
     }

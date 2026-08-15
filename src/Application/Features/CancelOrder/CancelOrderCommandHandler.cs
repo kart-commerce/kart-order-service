@@ -85,22 +85,19 @@ public sealed class CancelOrderCommandHandler(
             return Result.Failure<OrderViewDto>(Error.Conflict("A concurrent writer already moved this order; please retry."));
         }
 
-        logger.LogInformation("Stage {Stage}: order {OrderId} cancelled and committed", "OrderPersistedToDatabase", order.OrderId);
-
         var cancelledEvent = order.Events.LastOrDefault(e => e.EventType == "OrderCancelled");
         var compensationEvent = order.Events.LastOrDefault(e => e.EventType == "OrderCompensationTriggered");
-        logger.LogInformation(
-            "Stage {Stage}: outbox events {CompensationEventId} (OrderCompensationTriggered) and {CancelledEventId} (OrderCancelled) enqueued for order {OrderId}",
-            "OrderCancelledOutboxEventSaved",
-            compensationEvent?.Id,
-            cancelledEvent?.Id,
-            order.OrderId);
 
         await auditLogWriter.WriteAsync(
             AuditLogEntry.Create("kart-order-service", actingPrincipal, kind, "order.cancelled", "Order", order.OrderId.ToString()),
             cancellationToken);
 
-        logger.LogInformation("Stage {Stage}: order cancel process completed for order {OrderId}", "OrderCancelProcessCompleted", order.OrderId);
+        logger.LogInformation(
+            "Stage {Stage}: order {OrderId} cancelled, outbox events {CompensationEventId} (OrderCompensationTriggered) and {CancelledEventId} (OrderCancelled) enqueued",
+            "OrderCancelProcessCompleted",
+            order.OrderId,
+            compensationEvent?.Id,
+            cancelledEvent?.Id);
 
         return Result.Success(OrderMapper.ToDto(order));
     }

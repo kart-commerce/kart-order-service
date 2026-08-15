@@ -66,8 +66,7 @@ public sealed class ConsumeInventoryReservedCommandHandler(
 
         if (!stillWaiting)
         {
-            logger.LogInformation("Stage {Stage}: order {OrderId} persisted as Reserved (Created→Reserved, no outbox event — internal-only transition)", "OrderPersistedReserved", request.OrderId);
-            logger.LogInformation("Stage {Stage}: order {OrderId} inventory-reserved step of the shopping journey completed", "NormalShoppingPurchaseJourneyInventoryReservedCompleted", request.OrderId);
+            logger.LogInformation("Stage {Stage}: order {OrderId} persisted as Reserved (Created→Reserved, no outbox event), inventory-reserved step of the shopping journey completed", "NormalShoppingPurchaseJourneyInventoryReservedCompleted", request.OrderId);
         }
 
         return Result.Success();

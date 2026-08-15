@@ -27,12 +27,6 @@ public sealed class ValidationBehavior<TRequest, TResponse>(
         {
             var requestName = typeof(TRequest).Name;
 
-            // checkpoint-logging-standard.md stage 4 ("<Rule>ValidationFailed", Warning with the
-            // reason before throwing) generalized here for every FluentValidation validator on
-            // this service, rather than duplicated per handler — the ValidationException itself
-            // is still logged once more, generically, at the API boundary by
-            // Kart.Shared.ErrorHandling.KartExceptionHandler; this line is the one that's
-            // greppable by Stage and carries the actual field-level reasons.
             logger.LogWarning(
                 "Stage {Stage}: {RequestName} rejected — {Errors}",
                 $"{requestName}ValidationFailed",

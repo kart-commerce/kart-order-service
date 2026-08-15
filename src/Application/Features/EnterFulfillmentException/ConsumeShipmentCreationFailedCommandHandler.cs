@@ -36,8 +36,8 @@ public sealed class ConsumeShipmentCreationFailedCommandHandler(
             return result;
         }
 
-        // Stage 5 decision branch — this is the actual escalation trigger Flow #7's "Handle Order
-        // Escalation" step exists to resolve (see ResolveFulfillmentExceptionCommandHandler).
+        // This is the actual escalation trigger Flow #7's "Handle Order Escalation" step exists
+        // to resolve (see ResolveFulfillmentExceptionCommandHandler).
         logger.LogInformation("Stage {Stage}: order {OrderId} escalation triggered — entering FulfillmentException", "FulfillmentExceptionEscalationTriggeredBranch", order.OrderId);
 
         try

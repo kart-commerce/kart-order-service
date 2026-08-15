@@ -87,8 +87,8 @@ public sealed class ShippingEventsConsumerHostedService(
 
             var result = routingKey switch
             {
-                "shipping.shipment.dispatched" => await Dispatch(sender, ToDispatchedCommand(json), "ConsumeShipmentDispatchedCommand", stoppingToken),
-                "shipping.shipment.creation-failed" => await Dispatch(sender, ToCreationFailedCommand(json), "ConsumeShipmentCreationFailedCommand", stoppingToken),
+                "shipping.shipment.dispatched" => await Dispatch(sender, ToDispatchedCommand(json), stoppingToken),
+                "shipping.shipment.creation-failed" => await Dispatch(sender, ToCreationFailedCommand(json), stoppingToken),
                 _ => throw new InvalidOperationException($"Shipping-events consumer has no handling for routing key '{routingKey}'."),
             };
 
@@ -105,12 +105,9 @@ public sealed class ShippingEventsConsumerHostedService(
         }
     }
 
-    private async Task<Kart.Shared.Domain.Result> Dispatch<TCommand>(ISender sender, TCommand command, string commandName, CancellationToken cancellationToken)
-        where TCommand : MediatR.IRequest<Kart.Shared.Domain.Result>
-    {
-        logger.LogInformation("Stage {Stage}: dispatching {CommandName} from {Queue}", $"{commandName}Dispatched", commandName, QueueName);
-        return await sender.Send(command, cancellationToken);
-    }
+    private static async Task<Kart.Shared.Domain.Result> Dispatch<TCommand>(ISender sender, TCommand command, CancellationToken cancellationToken)
+        where TCommand : MediatR.IRequest<Kart.Shared.Domain.Result> =>
+        await sender.Send(command, cancellationToken);
 
     private static ConsumeShipmentDispatchedCommand ToDispatchedCommand(string json)
     {

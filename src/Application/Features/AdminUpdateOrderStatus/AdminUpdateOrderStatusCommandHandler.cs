@@ -70,16 +70,18 @@ public sealed class AdminUpdateOrderStatusCommandHandler(
             return Result.Failure<OrderViewDto>(Error.Conflict("A concurrent writer already moved this order; please retry."));
         }
 
-        logger.LogInformation("Stage {Stage}: order {OrderId} status advanced to {TargetStatus} and committed", "OrderPersistedToDatabase", order.OrderId, request.TargetStatus);
-
         var statusChangedEvent = order.Events.LastOrDefault(e => e.EventType == "OrderStatusChangedByAdmin");
-        logger.LogInformation("Stage {Stage}: outbox event {OutboxEventId} (OrderStatusChangedByAdmin) enqueued for order {OrderId}", "OrderStatusChangedByAdminOutboxEventSaved", statusChangedEvent?.Id, order.OrderId);
 
         await auditLogWriter.WriteAsync(
             AuditLogEntry.Create("kart-order-service", actingPrincipal, kind, "order.status.admin_updated", "Order", order.OrderId.ToString()),
             cancellationToken);
 
-        logger.LogInformation("Stage {Stage}: admin status update process completed for order {OrderId}", "AdminUpdateOrderStatusProcessCompleted", order.OrderId);
+        logger.LogInformation(
+            "Stage {Stage}: order {OrderId} status advanced to {TargetStatus}, outbox event {OutboxEventId} (OrderStatusChangedByAdmin) enqueued",
+            "AdminUpdateOrderStatusProcessCompleted",
+            order.OrderId,
+            request.TargetStatus,
+            statusChangedEvent?.Id);
 
         return Result.Success(OrderMapper.ToDto(order));
     }
