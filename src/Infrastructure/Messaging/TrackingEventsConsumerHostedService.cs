@@ -113,6 +113,7 @@ public sealed class TrackingEventsConsumerHostedService(
             var properties = channel.CreateBasicProperties();
             properties.Persistent = true;
             properties.Headers = new Dictionary<string, object> { [RetryCountHeader] = retryCount + 1 };
+            RetryHeaders.StampOriginalRoutingKey(properties.Headers, args);
 
             channel.BasicPublish(exchange: string.Empty, routingKey: tier.Name, basicProperties: properties, body: args.Body);
             channel.BasicAck(args.DeliveryTag, multiple: false);

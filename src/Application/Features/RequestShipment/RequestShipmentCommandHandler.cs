@@ -1,3 +1,4 @@
+using System.Linq;
 using Kart.Shared.Auditing;
 using Kart.Shared.Domain;
 using KartOrderService.Application.Common.Exceptions;
@@ -37,6 +38,7 @@ public sealed class RequestShipmentCommandHandler(
         if (order is null)
         {
             await unitOfWork.RollbackTransactionAsync(cancellationToken);
+            logger.LogWarning("Stage {Stage}: shipment request rejected, order {OrderId} was not found", "RequestShipmentNotFound", request.OrderId);
             return Result.Failure<OrderViewDto>(Error.NotFound($"Order {request.OrderId} was not found."));
         }
 
@@ -44,8 +46,11 @@ public sealed class RequestShipmentCommandHandler(
         if (requestResult.IsFailure)
         {
             await unitOfWork.RollbackTransactionAsync(cancellationToken);
+            logger.LogWarning("Stage {Stage}: order {OrderId} is not eligible for a shipment request from status '{Status}'", "RequestShipmentNotEligible", order.OrderId, order.Status);
             return Result.Failure<OrderViewDto>(requestResult.Error);
         }
+
+        logger.LogInformation("Stage {Stage}: order {OrderId} is Paid and eligible for shipment request", "RequestShipmentEligibleBranch", order.OrderId);
 
         try
         {
@@ -59,12 +64,17 @@ public sealed class RequestShipmentCommandHandler(
             return Result.Failure<OrderViewDto>(Error.Conflict("A concurrent writer already moved this order; please retry."));
         }
 
-        logger.LogInformation("Stage {Stage}: shipment request persisted for order {OrderId}", "OrderPersistedToDatabase", order.OrderId);
-        logger.LogInformation("Stage {Stage}: OrderShipmentRequested outbox event saved for order {OrderId}", "OrderShipmentRequestedOutboxEventSaved", order.OrderId);
+        var shipmentRequestedEvent = order.Events.LastOrDefault(e => e.EventType == "OrderShipmentRequested");
 
         await auditLogWriter.WriteAsync(
             AuditLogEntry.Create("kart-order-service", actingPrincipal, kind, "order.shipment_requested", "Order", order.OrderId.ToString()),
             cancellationToken);
+
+        logger.LogInformation(
+            "Stage {Stage}: shipment request persisted for order {OrderId}, outbox event {OutboxEventId} (OrderShipmentRequested) enqueued",
+            "RequestShipmentProcessCompleted",
+            order.OrderId,
+            shipmentRequestedEvent?.Id);
 
         return Result.Success(OrderMapper.ToDto(order));
     }

@@ -23,18 +23,20 @@ public sealed class GenerateInvoiceQueryHandler(
 
     public async Task<Result<InvoiceDto>> Handle(GenerateInvoiceQuery request, CancellationToken cancellationToken)
     {
-        logger.LogInformation("Stage {Stage}: invoice requested for order {OrderId}", "GenerateInvoiceHandlerStarted", request.OrderId);
-
         var order = await readRepository.GetByIdAsync(request.OrderId, cancellationToken);
         if (order is null)
         {
+            logger.LogWarning("Stage {Stage}: invoice rejected, order {OrderId} was not found", "GenerateInvoiceNotFound", request.OrderId);
             return Result.Failure<InvoiceDto>(Error.NotFound($"Order {request.OrderId} was not found."));
         }
 
         if (!InvoiceableStatuses.Contains(order.Status))
         {
+            logger.LogWarning("Stage {Stage}: order {OrderId} has status '{Status}' — not yet invoiceable", "GenerateInvoiceNotEligible", request.OrderId, order.Status);
             return Result.Failure<InvoiceDto>(Error.Conflict($"Order {request.OrderId} has status '{order.Status}' — an invoice is only available once payment has completed (Paid or later)."));
         }
+
+        logger.LogInformation("Stage {Stage}: order {OrderId} is invoiceable (status '{Status}')", "GenerateInvoiceEligibleBranch", order.OrderId, order.Status);
 
         var invoiceNumber = "INV-" + request.OrderId.ToString("N")[..10].ToUpperInvariant();
 
@@ -49,6 +51,8 @@ public sealed class GenerateInvoiceQueryHandler(
             order.ShippingAddress,
             order.CreatedAt,
             DateTimeOffset.UtcNow);
+
+        logger.LogInformation("Stage {Stage}: invoice {InvoiceNumber} generated for order {OrderId}", "GenerateInvoiceProcessCompleted", invoiceNumber, order.OrderId);
 
         return Result.Success(invoice);
     }

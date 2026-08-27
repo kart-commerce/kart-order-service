@@ -25,6 +25,11 @@ public sealed class OrdersController(ISender sender, ILogger<OrdersController> l
 {
     private const string FlowName = "OrderManagementAdmin";
 
+    /// <summary>ORD-1's `Create` action is the customer's own checkout completing (catalog flow
+    /// #1's "Order Creation" step), not an admin action on an existing order — every other action
+    /// in this controller stays tagged <see cref="FlowName"/>.</summary>
+    private const string ShoppingJourneyFlowName = "NormalShoppingPurchaseJourney";
+
     /// <summary>ORD-1: api-contract.yaml `POST /v1/orders` — requires `Idempotency-Key`. Synchronously reserves Inventory per line item before returning `202`.</summary>
     [HttpPost]
     [ProducesResponseType(typeof(OrderViewDto), StatusCodes.Status202Accepted)]
@@ -36,11 +41,20 @@ public sealed class OrdersController(ISender sender, ILogger<OrdersController> l
         [FromHeader(Name = "Idempotency-Key")] string idempotencyKey,
         CancellationToken cancellationToken)
     {
+        using var _ = KartFlowContext.Push(ShoppingJourneyFlowName);
+        logger.LogInformation("Stage {Stage}: order create request received for user {UserId}", "OrderCreateRequestReceived", request.UserId);
+
         var items = request.Items
             .Select(i => new CreateOrderLineItemRequest(i.Sku, i.Qty, i.UnitPrice.Amount))
             .ToList();
 
         var result = await sender.Send(new CreateOrderCommand(idempotencyKey, request.UserId, items, request.Currency), cancellationToken);
+
+        if (result.IsSuccess)
+        {
+            logger.LogInformation("Stage {Stage}: order {OrderId} created for user {UserId}", "OrderPersistedToDatabase", result.Value.OrderId, request.UserId);
+        }
+
         return this.ToActionResult<OrderViewDto, OrderViewDto>(result, dto => Accepted(dto));
     }
 
@@ -140,6 +154,7 @@ public sealed class OrdersController(ISender sender, ILogger<OrdersController> l
 
         if (!Enum.TryParse<OrderStatus>(request.TargetStatus, ignoreCase: true, out var targetStatus))
         {
+            logger.LogWarning("Stage {Stage}: status update rejected for order {OrderId} — '{TargetStatus}' is not a recognized order status", "OrderStatusUpdateValidationFailed", id, request.TargetStatus);
             return this.MapFailure(Kart.Shared.Domain.Error.Custom("validation_error", $"'{request.TargetStatus}' is not a recognized order status."));
         }
 

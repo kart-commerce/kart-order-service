@@ -18,7 +18,11 @@ public sealed class ConsumeInventoryReservationFailedCommandHandler(ILogger<Cons
 {
     public Task<Result> Handle(ConsumeInventoryReservationFailedCommand request, CancellationToken cancellationToken)
     {
-        logger.LogInformation("InventoryReservationFailed received for order {OrderId}/sku {Sku} — no-op, no order persists past a failed synchronous reserve call.", request.OrderId, request.Sku);
+        logger.LogInformation(
+            "Stage {Stage}: InventoryReservationFailed received for order {OrderId}/sku {Sku} — no-op, no order persists past a failed synchronous reserve call",
+            "InventoryReservationFailedNoOpBranch",
+            request.OrderId,
+            request.Sku);
         return Task.FromResult(Result.Success());
     }
 }

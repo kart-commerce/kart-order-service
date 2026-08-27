@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using Kart.Shared.Messaging;
+using Kart.Shared.Observability;
 using KartOrderService.Application.Features.CompensateOnPaymentFailed;
 using KartOrderService.Application.Features.ConfirmOrderOnPaymentCompleted;
 using KartOrderService.Application.Features.ReactToChargeback;
@@ -22,6 +23,7 @@ public sealed class PaymentEventsConsumerHostedService(
 {
     private const string QueueName = "order.payment-events.queue";
     private const string RetryCountHeader = "x-order-payment-events-retry-count";
+    private const string ShoppingJourneyFlowName = "NormalShoppingPurchaseJourney";
 
     private static readonly TimeSpan ReconnectDelay = TimeSpan.FromSeconds(10);
     private static readonly JsonSerializerOptions SerializerOptions = new(JsonSerializerDefaults.Web);
@@ -63,6 +65,7 @@ public sealed class PaymentEventsConsumerHostedService(
         // Payment and flows into Order via this queue), so this consumer's work links to the
         // original TraceId in Tempo/Loki instead of starting a disconnected root trace.
         using var activity = RabbitMqTraceContext.StartConsumeActivity(QueueName, args.BasicProperties);
+        using var flowScope = KartFlowContext.Push(ShoppingJourneyFlowName);
 
         try
         {
@@ -70,12 +73,15 @@ public sealed class PaymentEventsConsumerHostedService(
             var sender = scope.ServiceProvider.GetRequiredService<ISender>();
             var json = Encoding.UTF8.GetString(args.Body.Span);
 
-            var result = args.RoutingKey switch
+            var routingKey = RetryHeaders.GetEffectiveRoutingKey(args);
+            logger.LogInformation("Stage {Stage}: payment event consumed from {Queue} ({RoutingKey})", "PaymentEventConsumed", QueueName, routingKey);
+
+            var result = routingKey switch
             {
                 "payment.intent.completed" => await sender.Send(ToCompletedCommand(json), stoppingToken),
                 "payment.intent.failed" => await sender.Send(ToFailedCommand(json), stoppingToken),
                 "payment.chargeback.received" => await sender.Send(ToChargebackCommand(json), stoppingToken),
-                _ => throw new InvalidOperationException($"Payment-events consumer has no handling for routing key '{args.RoutingKey}'."),
+                _ => throw new InvalidOperationException($"Payment-events consumer has no handling for routing key '{routingKey}'."),
             };
 
             if (result.IsFailure)
@@ -83,6 +89,7 @@ public sealed class PaymentEventsConsumerHostedService(
                 throw new InvalidOperationException($"Payment-event handling failed: {result.Error.Code} - {result.Error.Message}");
             }
 
+            logger.LogInformation("Stage {Stage}: order advanced after {RoutingKey}", "OrderAdvancedOnPaymentEvent", routingKey);
             channel.BasicAck(args.DeliveryTag, multiple: false);
         }
         catch (Exception ex)
@@ -123,15 +130,16 @@ public sealed class PaymentEventsConsumerHostedService(
             var properties = channel.CreateBasicProperties();
             properties.Persistent = true;
             properties.Headers = new Dictionary<string, object> { [RetryCountHeader] = retryCount + 1 };
+            RetryHeaders.StampOriginalRoutingKey(properties.Headers, args);
 
             channel.BasicPublish(exchange: string.Empty, routingKey: tier.Name, basicProperties: properties, body: args.Body);
             channel.BasicAck(args.DeliveryTag, multiple: false);
 
-            logger.LogWarning(ex, "Handling payment event ({RoutingKey}) failed; routed to retry tier {Tier} (attempt {Attempt}).", args.RoutingKey, tier.Name, retryCount + 1);
+            logger.LogWarning(ex, "Handling payment event ({RoutingKey}) failed; routed to retry tier {Tier} (attempt {Attempt}).", RetryHeaders.GetEffectiveRoutingKey(args), tier.Name, retryCount + 1);
         }
         else
         {
-            logger.LogCritical(ex, "Handling payment event ({RoutingKey}) failed after exhausting all retry tiers; dead-lettering — paged on-call per the elevated tier (event-contract.md).", args.RoutingKey);
+            logger.LogCritical(ex, "Handling payment event ({RoutingKey}) failed after exhausting all retry tiers; dead-lettering — paged on-call per the elevated tier (event-contract.md).", RetryHeaders.GetEffectiveRoutingKey(args));
             channel.BasicNack(args.DeliveryTag, multiple: false, requeue: false);
         }
     }

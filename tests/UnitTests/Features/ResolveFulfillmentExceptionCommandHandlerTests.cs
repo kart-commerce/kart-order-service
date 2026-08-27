@@ -5,6 +5,7 @@ using KartOrderService.Application.Common.Interfaces;
 using KartOrderService.Application.Features.ResolveFulfillmentException;
 using KartOrderService.Domain.Orders;
 using KartOrderService.UnitTests.TestSupport;
+using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using Xunit;
 
@@ -29,7 +30,8 @@ public sealed class ResolveFulfillmentExceptionCommandHandlerTests
     }
 
     private ResolveFulfillmentExceptionCommandHandler CreateHandler() => new(
-        _orderRepository, _unitOfWork, new InventoryReleaseCompensator(_inventoryClient), _paymentClient, _currentPrincipal, new FakeTimeProvider(Now), _auditLogWriter);
+        _orderRepository, _unitOfWork, new InventoryReleaseCompensator(_inventoryClient), _paymentClient, _currentPrincipal, new FakeTimeProvider(Now), _auditLogWriter,
+        NullLogger<ResolveFulfillmentExceptionCommandHandler>.Instance);
 
     private static Order NewFulfillmentExceptionOrder(Guid? reservationId = null)
     {

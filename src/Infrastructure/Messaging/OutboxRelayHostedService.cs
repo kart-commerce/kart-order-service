@@ -27,6 +27,10 @@ public sealed class OutboxRelayHostedService(
     ILogger<OutboxRelayHostedService> logger) : BackgroundService
 {
     private const string FlowName = "OrderManagementAdmin";
+
+    /// <summary>Matches <see cref="Api.Controllers.OrdersController.ShoppingJourneyFlowName"/> — the customer-facing checkout event, not an admin action, gets tagged with the shopping journey instead of every other event type this relay publishes.</summary>
+    private const string ShoppingJourneyFlowName = "NormalShoppingPurchaseJourney";
+    private static readonly HashSet<string> ShoppingJourneyEventTypes = ["OrderCreated", "OrderConfirmed"];
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan ReconnectDelay = TimeSpan.FromSeconds(10);
     private const int BatchSize = 100;
@@ -95,11 +99,11 @@ public sealed class OutboxRelayHostedService(
             .ThenBy(e => e.Sequence)
             .ToList();
 
-        using var _ = KartFlowContext.Push(FlowName);
-
         var now = DateTimeOffset.UtcNow;
         foreach (var outboxEvent in pending)
         {
+            using var _ = KartFlowContext.Push(ShoppingJourneyEventTypes.Contains(outboxEvent.EventType!) ? ShoppingJourneyFlowName : FlowName);
+
             var properties = channel.CreateBasicProperties();
             properties.Persistent = true;
             properties.MessageId = outboxEvent.Id.ToString();

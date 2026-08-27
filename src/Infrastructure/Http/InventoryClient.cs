@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using KartOrderService.Application.Common.Interfaces;
 using Microsoft.Extensions.Logging;
@@ -14,14 +15,32 @@ namespace KartOrderService.Infrastructure.Http;
 /// (`Infrastructure/DependencyInjection.cs`, via `Microsoft.Extensions.Http.Polly`) — this class
 /// only translates HTTP responses/timeouts/broken-circuit exceptions into
 /// <see cref="InventoryReserveResult"/>, never throwing for an expected outcome.
+///
+/// Inventory & Stock Management flow fix: this client used to attach no bearer token at all, so
+/// every real call 401'd against kart-inventory-service's `OrderServicePolicy` (found + fixed
+/// 2026-08-12 — see [[kart-flow7-order-management-admin-done]] for the original discovery during
+/// flow #7). Now shares `ClientCredentialsTokenProvider` with `PaymentClient`, scoped to its own
+/// `Inventory:ClientCredentials` config section — degrades to sending unauthenticated (matching
+/// `PaymentClient`'s own fallback) rather than failing closed if that section is unset.
 /// </summary>
-public sealed class InventoryClient(HttpClient httpClient, ILogger<InventoryClient> logger) : IInventoryClient
+public sealed class InventoryClient(HttpClient httpClient, ClientCredentialsTokenProvider tokenProvider, ILogger<InventoryClient> logger) : IInventoryClient
 {
     public async Task<InventoryReserveResult> ReserveAsync(Guid orderId, string sku, int qty, CancellationToken cancellationToken)
     {
         try
         {
-            var response = await httpClient.PostAsJsonAsync("/v1/inventory/reserve", new { orderId, sku, qty }, cancellationToken);
+            using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/inventory/reserve")
+            {
+                Content = JsonContent.Create(new { orderId, sku, qty }),
+            };
+
+            var accessToken = await tokenProvider.GetAccessTokenAsync("Inventory", "inventory-reserve", cancellationToken);
+            if (accessToken is not null)
+            {
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+            }
+
+            var response = await httpClient.SendAsync(request, cancellationToken);
 
             if (response.StatusCode == HttpStatusCode.Created)
             {
@@ -48,7 +67,18 @@ public sealed class InventoryClient(HttpClient httpClient, ILogger<InventoryClie
     {
         try
         {
-            var response = await httpClient.PostAsJsonAsync("/v1/inventory/release", new { reservationId }, cancellationToken);
+            using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/inventory/release")
+            {
+                Content = JsonContent.Create(new { reservationId }),
+            };
+
+            var accessToken = await tokenProvider.GetAccessTokenAsync("Inventory", "inventory-reserve", cancellationToken);
+            if (accessToken is not null)
+            {
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+            }
+
+            var response = await httpClient.SendAsync(request, cancellationToken);
             if (!response.IsSuccessStatusCode && response.StatusCode != HttpStatusCode.NotFound)
             {
                 logger.LogWarning("Inventory release for reservation {ReservationId} returned {StatusCode}.", reservationId, response.StatusCode);
